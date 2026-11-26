@@ -22,13 +22,14 @@ public record Account(
     @NotNull AccountStatus status,
     @NotNull Instant createdAt
 ) {
-    /** Owner used by the legacy /accounts CRUD endpoint, which has no owner field yet. */
-    public static final UUID DEFAULT_OWNER_ID =
-        UUID.fromString("00000000-0000-0000-0000-000000000001");
-
-    public static Account create(String accountNumber, String currency) {
-        return new Account(UUID.randomUUID(), DEFAULT_OWNER_ID, accountNumber, currency,
-                           BigDecimal.ZERO, AccountType.CHECKING, AccountStatus.ACTIVE,
+    /**
+     * Crea una cuenta con un dueño real (spec-03): el {@code ownerId} se toma del
+     * atributo {@code userId} del JWT, nunca de un valor por defecto ni del body.
+     */
+    public static Account create(UUID ownerId, String accountNumber, String currency,
+                                 AccountType accountType, BigDecimal initialBalance) {
+        return new Account(UUID.randomUUID(), ownerId, accountNumber, currency,
+                           initialBalance, accountType, AccountStatus.ACTIVE,
                            Instant.now());
     }
 }

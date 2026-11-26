@@ -4,11 +4,11 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 
 ## Estado actual
 - Repo skeleton Micronaut 4.10.12 / Java 21 / Gradle wrapper 8.14.3. `rootProject.name="bankaccount"` (carpeta `bank_api`). Entrada `io.onstructive.micronaut.Application`.
-- Controllers: `AccountController` en `/accounts` (legacy, sin `/api`) y `AuthController` en `/api/auth` (spec-02: `POST /register`, `POST /login`, `@PermitAll`).
-- Seguridad **activada** (spec-02): `micronaut.security.enabled=true`, JWT HS256 con `JWT_SECRET` (default dev ≥32 bytes, **definir siempre en producción**), expiración 3600 s. `/api/auth/**` público; `/accounts` autenticado hasta spec-03. Swagger sigue anonymous. Contraseñas BCrypt 10 rondas.
+- Controllers: `AccountController` en `/api/accounts` (spec-03: `GET`, `POST`, `GET /{id}`, `DELETE /{id}`; dueño desde el claim `userId` del JWT; sin deposit/withdraw) y `AuthController` en `/api/auth` (spec-02: `POST /register`, `POST /login`, `@PermitAll`). La ruta legacy `/accounts` ya no existe.
+- Seguridad **activada** (spec-02, propiedad en spec-03): `micronaut.security.enabled=true`, JWT HS256 con `JWT_SECRET` (default dev ≥32 bytes, **definir siempre en producción**), expiración 3600 s. `/api/auth/**` público; `/api/accounts` con `@Secured(SecurityRule.IS_AUTHENTICATED)` y filtro por `userId`. Swagger sigue anonymous. Contraseñas BCrypt 10 rondas.
 - Persistencia (spec-01): PostgreSQL 15 en Podman rootless (`127.0.0.1:5432`, db `bank_api`, usuario `bank_user`, password `bank_pass`). Tres repositorios con `Dialect.POSTGRES`. **`datasources.default.schema-generate=NONE`**: Flyway es dueño del esquema con `V1__CreateTables.sql` y `V2__AddIndexes.sql`.
 - Configuración real: `application.properties`, `logback.xml`, `openapi.properties`. `src/main/resources/openapi/bankaccount-0.0.yml` es placeholder obsoleto; no es fuente de verdad.
-- Tests: `BankaccountTest` (smoke `@MicronautTest`) + `RepositoryTest` (spec-01) + `AuthControllerTest` (spec-02, 4 tests HTTP). `./gradlew test` pasa con la BD de Podman activa (2026-11-25): 6 tests, 0 failures/errors.
+- Tests: `BankaccountTest` (smoke `@MicronautTest`) + `RepositoryTest` (spec-01) + `AuthControllerTest` (spec-02, 4 tests HTTP) + `AccountControllerTest` (spec-03, 6 tests HTTP con JWT real). `./gradlew test` pasa con la BD de Podman activa (2026-11-25): 12 tests, 0 failures/errors.
 - `README.md` describe el objetivo, no el código implementado. El estado real prevalece: verifica `src/` antes de asumir endpoints.
 
 ## Entorno (spec-00)
@@ -50,3 +50,12 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - Lección: `HttpClient.exchange` es reactivo; en tests usar `client.toBlocking().exchange(...)`.
 - `GlobalExceptionHandler` del skeleton permanece intacto (spec-05): el `AuthController` devuelve `HttpResponse` con estados explícitos (201/409/200/401) en lugar de lanzar excepciones.
 - Sin commit: queda pendiente `feat(auth): registro y login JWT (spec-02)`.
+
+## Spec-03 — cuentas con dueño bajo `/api/accounts` (2026-11-25)
+- `AccountController` en `/api/accounts` con `@Secured(SecurityRule.IS_AUTHENTICATED)` y `@ExecuteOn(TaskExecutors.IO)`. Inyecta `Authentication` como parámetro (lo resuelve `AuthenticationArgumentBinder`) y lee `getAttributes().get("userId")`. Sin `@Secured`, Micronaut Security devuelve **403 incluso con JWT válido**: `SecuredAnnotationRule` reporta `UNKNOWN` y `SecurityFilter` lanza `AuthorizationException`. `@PermitAll` no sirve porque haría público el endpoint.
+- Ownership: `AccountService.findByIdForOwner(id, ownerId)` filtra por `ownerId`; inexistente y ajeno se tratan igual (404 desde el controller). `delete` exige además `balance == 0` (400 si no). `deposit`/`withdraw` se conservan en el servicio para spec-04, pero ya no hay rutas legacy.
+- `Account.create(ownerId, accountNumber, currency, accountType, initialBalance)`; `DEFAULT_OWNER_ID` eliminado. `CreateAccountRequest` añade `accountType` (`@NotNull`) e `initialBalance` (`@PositiveOrZero`, nullable ⇒ 0 en el servicio).
+- `Authentication` en el JWT: `sub` = username, atributos `userId` (UUID en texto) y `email`. `getRoles()` de `AbstractSecurityRule` añade los pseudoroles `isAnonymous()`/`isAuthenticated()`, por lo que `SecurityRule.IS_AUTHENTICATED` funciona sin roles reales.
+- Lección: `/accounts` (sin ruta) con token devuelve 403, no 404, por el filtro de seguridad; el test de "ruta desaparecida" comprueba 4xx.
+- Lección: `HttpClient.exchange(HttpRequest, Argument.listOf(Account.class))` para obtener `HttpResponse<List<Account>>` tipado (con `List.class` solo se obtiene `HttpResponse<List>` sin genérico).
+- Sin commit: queda pendiente `feat(accounts): CRUD bajo /api/accounts con dueño desde JWT (spec-03)`.

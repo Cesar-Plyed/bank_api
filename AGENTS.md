@@ -4,15 +4,16 @@
 - `README.md` documenta JWT, PostgreSQL, transacciones y tests completos; el repo es un skeleton. Verifica `src/` antes de asumir que un endpoint existe.
 - Entrada: `io.onstructive.micronaut.Application`; paquete base `io.onstructive.micronaut`.
 - Stack verificado: Java 21 (`build.gradle.kts`), Micronaut 4.10.12 (`gradle.properties`), plugin Gradle 4.6.2, wrapper Gradle 8.14.3.
-- Controllers: `AccountController` en `/accounts` (**sin** prefijo `/api`, legacy): list, create, deposit, withdraw, delete; IDs `UUID`. `AuthController` en `/api/auth` (spec-02): `POST /register`, `POST /login`, ambos `@PermitAll`.
-- Seguridad **activada** (spec-02): `micronaut.security.enabled=true` + `micronaut-security-jwt`, HS256 con `JWT_SECRET` (default solamente de desarrollo en `application.properties`, ≥32 bytes). `/api/auth/**` es público; el resto (incluido `/accounts`) exige autenticación hasta la spec-03. Las reglas `intercept-url-map` de Swagger siguen anonymous. Hash de contraseñas BCrypt 10 rondas (`$2a$`/`$2b$`), nunca texto plano.
+- Controllers: `AccountController` en `/api/accounts` (spec-03): `GET` (list), `POST` (create), `GET /{id}`, `DELETE /{id}`; IDs `UUID`; `ownerId` tomado del claim `userId` del JWT; `deposit`/`withdraw` retirados del controller (se reimplementarán en `/api/transactions`, spec-04). La ruta legacy `/accounts` ya no existe. `AuthController` en `/api/auth` (spec-02): `POST /register`, `POST /login`, ambos `@PermitAll`.
+- Seguridad **activada** (spec-02, propiedad en spec-03): `micronaut.security.enabled=true` + `micronaut-security-jwt`, HS256 con `JWT_SECRET` (default solamente de desarrollo en `application.properties`, ≥32 bytes). `/api/auth/**` es público (`@PermitAll`); `/api/accounts` lleva `@Secured(SecurityRule.IS_AUTHENTICATED)` y filtra siempre por el `userId` del JWT (sin este annotation Micronaut Security responde 403 incluso con token válido). Las reglas `intercept-url-map` de Swagger siguen anonymous. Hash de contraseñas BCrypt 10 rondas (`$2a$`/`$2b$`), nunca texto plano.
 - Persistencia (spec-01): PostgreSQL 15 en Podman rootless en `127.0.0.1:5432` (db `bank_api`, usuario `bank_user`, password `bank_pass`). Los tres repositorios fijan `Dialect.POSTGRES`. **`datasources.default.schema-generate=NONE`**: Flyway es el único dueño del esquema (`V1__CreateTables.sql`, `V2__AddIndexes.sql` en `src/main/resources/db/migration/`).
 - Swagger UI: `/swagger-ui.html` (recursos `classpath:META-INF/swagger`). `src/main/resources/openapi/bankaccount-0.0.yml` es un placeholder obsoleto (solo `/bankaccount`): no es fuente de verdad.
 
 ## Comandos exactos
-- `./gradlew test` — suite actual: `BankaccountTest` (smoke de arranque) + `RepositoryTest` (spec-01, guarda/lee `User` y `Account`) + `AuthControllerTest` (spec-02, 4 tests HTTP de registro/login).
+- `./gradlew test` — suite actual (12 tests): `BankaccountTest` (smoke de arranque) + `RepositoryTest` (spec-01, guarda/lee `User` y `Account`) + `AuthControllerTest` (spec-02, 4 tests HTTP de registro/login) + `AccountControllerTest` (spec-03, 6 tests HTTP de cuentas con JWT real).
 - `./gradlew test --tests "io.onstructive.micronaut.BankaccountTest"` — test puntual.
 - `./gradlew test --tests "*Auth*Test"` — solo los tests de autenticación (spec-02).
+- `./gradlew test --tests "*Account*Test"` — solo los tests de cuentas con JWT real (spec-03).
 - `./gradlew run` / `./gradlew build` / `./gradlew classes`.
 - Requiere JDK 21 y `JAVA_HOME`: esta máquina no tiene `java` en PATH, así que el wrapper falla hasta exportarlo. JDK instalado (spec-00): `/home/void/AI/apps/jdk-21` (Temurin 21.0.13.1+2) → `export JAVA_HOME=/home/void/AI/apps/jdk-21; export PATH="$JAVA_HOME/bin:$PATH"`. No hay PostgreSQL en el host; sí hay Podman 6.1.4 para contenedores locales.
 - Base de datos (spec-01), **Podman, no Docker**. Arrancar:
@@ -26,7 +27,7 @@
 ## Convenciones del repo
 - Configuración real en `application.properties` (no YAML, pese al README), `logback.xml` y `openapi.properties`.
 - `settings.gradle.kts`: `rootProject.name="bankaccount"` (el directorio se llama `bank_api`).
-- Tests con `@MicronautTest` + `EmbeddedApplication`: `BankaccountTest` (smoke) y `RepositoryTest` (spec-01). Requieren la BD de Podman activa.
+- Tests con `@MicronautTest` + `EmbeddedApplication`: `BankaccountTest` (smoke) y `RepositoryTest` (spec-01). Los tests HTTP (`AuthControllerTest`, `AccountControllerTest`) usan `@MicronautTest(transactional=false)` para que el cliente vea los datos confirmados. Requieren la BD de Podman activa.
 - Preguntar antes de borrar o sobrescribir archivos (convención global del equipo).
 
 ## Spec Driven Development (SDD) — reglas obligatorias

@@ -95,3 +95,50 @@ Seguimiento de avance, cambios e incidencias. Fecha de hoy: **2026-11-25**.
 8. Contenedor `bank-api-db` dejado activo; no se borró nada. No se hizo commit (regla SDD).
 
 **No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(auth): registro y login JWT (spec-02)`.
+
+## 2026-11-25 — spec-03: Cuentas con dueño bajo `/api/accounts`
+
+**Acciones realizadas:**
+- `AccountController` migrado de `/accounts` a `/api/accounts` con `@Secured(SecurityRule.IS_AUTHENTICATED)`: `GET` (list), `POST` (create), `GET /{id}`, `DELETE /{id}`. Eliminados `deposit`/`withdraw` del controller (quedan para `/api/transactions`, spec-04). El controller lee el `ownerId` del claim `userId` del JWT inyectando `Authentication`; nunca del body. Ante un id ajeno o inexistente responde 404; borrar con saldo responde 400; sin token responde 401 (controlado por el filtro de seguridad).
+- `CreateAccountRequest` ampliado con `@NotNull AccountType accountType` y `@PositiveOrZero BigDecimal initialBalance` (omitido ⇒ 0). `Account.create(ownerId, accountNumber, currency, accountType, initialBalance)` recibe el dueño real; **`DEFAULT_OWNER_ID` eliminado**.
+- `AccountService`: `create(req, ownerId)`, `findAllByOwner(ownerId)`, `findByIdForOwner(id, ownerId)`, `delete(id, ownerId)`; conserva `deposit`/`withdraw` sin cambios funcionales. No se tocó `AccountRepository` (ya tenía `findByOwnerId`), ni auth, ni migraciones, ni `application.properties`.
+- `AccountControllerTest.java`: 6 tests HTTP con JWT real obtenido vía registro+login: dueño = claim `userId`, balance por defecto 0, listado solo propio, get de cuenta ajena/inexistente → 404, borrar con saldo → 4xx y borrar propia con saldo 0 → 204, sin token → 401, ruta legacy `/accounts` fuera de servicio. `@MicronautTest(transactional=false)`; sufijos UUID para no colisionar con filas anteriores.
+
+**Verificación (salida literal):**
+- `./gradlew test --tests "*Account*Test" --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+  > Task :compileTestJava
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources NO-SOURCE
+  > Task :testClasses UP-TO-DATE
+  > Task :test
+
+  BUILD SUCCESSFUL in 4s
+  5 actionable tasks: 2 executed, 3 up-to-date
+  ```
+- `./gradlew test --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+  > Task :compileTestJava UP-TO-DATE
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources NO-SOURCE
+  > Task :testClasses UP-TO-DATE
+  > Task :test
+
+  BUILD SUCCESSFUL in 5s
+  5 actionable tasks: 1 executed, 4 up-to-date
+  ```
+- XML de resultados: `AccountControllerTest: tests=6 skipped=0 failures=0 errors=0`; `AuthControllerTest: tests=4 skipped=0 failures=0 errors=0`; `BankaccountTest: tests=1 skipped=0 failures=0 errors=0`; `RepositoryTest: tests=1 skipped=0 failures=0 errors=0` (**12 tests, 0 failures/errors**).
+
+**Incidencias y desviaciones:**
+1. Micronaut Security 4 **rechaza con 403 las rutas sin una regla explícita de autorización**, aunque el JWT sea válido (`SecuredAnnotationRule` devuelve `UNKNOWN` y `SecurityFilter` cae en `AuthorizationException`). Se añadió `@Secured(SecurityRule.IS_AUTHENTICATED)` en `AccountController` (archivo permitido); sin él, los 5 tests autenticados fallaban con 403. No se tocó `application.properties` (fuera de permisos de la spec).
+2. La ruta legacy `/accounts` con token devuelve **403, no 404**: el filtro de seguridad no encuentra regla para una ruta inexistente y responde 403 antes del router. El test verifica que es 4xx (fuera de servicio) en vez de exigir 404 literal.
+3. `initialBalance` se declaró nullable en el DTO y el valor por defecto (0) se aplica en `AccountService`; `@PositiveOrZero` ignora `null`, así que un body sin el campo es válido y crea saldo 0.
+4. `@ExecuteOn(TaskExecutors.IO)` se añadió al controller para no ejecutar JDBC en el event loop (misma convención que `AuthController`). Pequeña mejora no pedida literalmente por la spec.
+5. `GlobalExceptionHandler` (spec-05) sigue intacto: el controller traduce sus propias excepciones a 404/400 sin manejo global.
+6. Contenedor `bank-api-db` dejado activo; no se borró nada. Las filas de prueba quedan en la BD (convención ya aceptada). No se hizo commit (regla SDD): sugerencia `feat(accounts): CRUD bajo /api/accounts con dueño desde JWT (spec-03)`.
