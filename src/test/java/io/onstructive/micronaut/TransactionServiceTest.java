@@ -11,14 +11,17 @@ import io.onstructive.micronaut.model.AccountType;
 import io.onstructive.micronaut.model.Transaction;
 import io.onstructive.micronaut.model.TransactionStatus;
 import io.onstructive.micronaut.model.TransactionType;
+import io.onstructive.micronaut.model.User;
 import io.onstructive.micronaut.repository.AccountRepository;
 import io.onstructive.micronaut.repository.TransactionRepository;
+import io.onstructive.micronaut.repository.UserRepository;
 import io.onstructive.micronaut.service.AccountService;
 import io.onstructive.micronaut.service.TransactionService;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -44,6 +47,18 @@ class TransactionServiceTest {
     @Inject
     TransactionRepository transactionRepository;
 
+    @Inject
+    UserRepository userRepository;
+
+    /** Dueño real: V3 exige que accounts.owner_id exista en users. */
+    private UUID owner() {
+        String suffix = UUID.randomUUID().toString();
+        UUID id = UUID.randomUUID();
+        userRepository.save(new User(id, "ts-owner-" + suffix, "ts-owner-" + suffix + "@example.com",
+                                     "hash", Instant.now()));
+        return id;
+    }
+
     private Account account(UUID owner, String balance) {
         return accountService.create(
                 new CreateAccountRequest("TS-" + UUID.randomUUID(), "EUR",
@@ -61,7 +76,7 @@ class TransactionServiceTest {
 
     @Test
     void depositIncreasesBalanceAndSavesOneCompletedTransaction() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account account = account(owner, "100.00");
         long before = transactionRepository.count();
 
@@ -81,7 +96,7 @@ class TransactionServiceTest {
 
     @Test
     void withdrawDecreasesBalanceAndSavesOneCompletedTransaction() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account account = account(owner, "100.00");
         long before = transactionRepository.count();
 
@@ -98,7 +113,7 @@ class TransactionServiceTest {
 
     @Test
     void withdrawWithInsufficientFundsRollsBackBalanceAndTransaction() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account account = account(owner, "10.00");
         long before = transactionRepository.count();
 
@@ -112,7 +127,7 @@ class TransactionServiceTest {
 
     @Test
     void transferMovesFundsBetweenOwnedAccountsAndSavesOneTransaction() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account from = account(owner, "100.00");
         Account to = account(owner, "50.00");
         long before = transactionRepository.count();
@@ -132,7 +147,7 @@ class TransactionServiceTest {
 
     @Test
     void transferWithInsufficientFundsRollsBackBothBalancesAndTransaction() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account from = account(owner, "10.00");
         Account to = account(owner, "0.00");
         long before = transactionRepository.count();
@@ -148,7 +163,7 @@ class TransactionServiceTest {
 
     @Test
     void transferToTheSameAccountIsRejected() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account account = account(owner, "100.00");
         long before = transactionRepository.count();
 
@@ -162,9 +177,9 @@ class TransactionServiceTest {
 
     @Test
     void foreignAndMissingAccountsAreRejectedByEveryOperation() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account mine = account(owner, "100.00");
-        Account foreign = account(UUID.randomUUID(), "20.00");
+        Account foreign = account(owner(), "20.00");
         long before = transactionRepository.count();
 
         assertThrows(AccountNotFoundException.class,
@@ -187,7 +202,7 @@ class TransactionServiceTest {
 
     @Test
     void historyReturnsMovementsInBothDirections() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account a = account(owner, "100.00");
         Account b = account(owner, "0.00");
 

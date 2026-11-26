@@ -10,12 +10,15 @@ import io.onstructive.micronaut.exception.InsufficientFundsException;
 import io.onstructive.micronaut.model.Account;
 import io.onstructive.micronaut.model.AccountStatus;
 import io.onstructive.micronaut.model.AccountType;
+import io.onstructive.micronaut.model.User;
 import io.onstructive.micronaut.repository.AccountRepository;
+import io.onstructive.micronaut.repository.UserRepository;
 import io.onstructive.micronaut.service.AccountService;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -35,6 +38,18 @@ class AccountServiceTest {
     @Inject
     AccountRepository repository;
 
+    @Inject
+    UserRepository userRepository;
+
+    /** Dueño real: V3 exige que accounts.owner_id exista en users. */
+    private UUID owner() {
+        String suffix = UUID.randomUUID().toString();
+        UUID id = UUID.randomUUID();
+        userRepository.save(new User(id, "as-owner-" + suffix, "as-owner-" + suffix + "@example.com",
+                                     "hash", Instant.now()));
+        return id;
+    }
+
     private CreateAccountRequest request(String accountNumber, String currency,
                                          AccountType type, BigDecimal initialBalance) {
         return new CreateAccountRequest(accountNumber, currency, type, initialBalance);
@@ -42,7 +57,7 @@ class AccountServiceTest {
 
     @Test
     void createUsesOwnerAndDefaultsBalanceToZero() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         String number = "AS-" + UUID.randomUUID();
 
         Account created = service.create(request(number, "EUR", AccountType.SAVINGS, null), owner);
@@ -60,7 +75,7 @@ class AccountServiceTest {
 
     @Test
     void createPersistsProvidedInitialBalanceAndCurrency() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account created = service.create(
                 request("AS-" + UUID.randomUUID(), "USD", AccountType.CHECKING,
                         new BigDecimal("123.45")),
@@ -74,13 +89,13 @@ class AccountServiceTest {
 
     @Test
     void createRejectsDuplicateAccountNumber() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         String number = "AS-" + UUID.randomUUID();
         service.create(request(number, "EUR", AccountType.CHECKING, BigDecimal.ZERO), owner);
 
         DuplicateResourceException error = assertThrows(DuplicateResourceException.class,
                 () -> service.create(request(number, "EUR", AccountType.SAVINGS, BigDecimal.TEN),
-                                     UUID.randomUUID()));
+                                     owner()));
 
         assertEquals(HttpStatus.CONFLICT, error.status());
         assertTrue(error.getMessage().contains(number));
@@ -88,8 +103,8 @@ class AccountServiceTest {
 
     @Test
     void findAllByOwnerReturnsOnlyThatOwnersAccounts() {
-        UUID owner = UUID.randomUUID();
-        UUID other = UUID.randomUUID();
+        UUID owner = owner();
+        UUID other = owner();
         Account mine = service.create(
                 request("AS-" + UUID.randomUUID(), "EUR", AccountType.CHECKING, BigDecimal.ZERO), owner);
         Account foreign = service.create(
@@ -104,12 +119,12 @@ class AccountServiceTest {
 
     @Test
     void findByIdForOwnerRejectsMissingAndForeignAccounts() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account mine = service.create(
                 request("AS-" + UUID.randomUUID(), "EUR", AccountType.CHECKING, BigDecimal.ZERO), owner);
         Account foreign = service.create(
                 request("AS-" + UUID.randomUUID(), "EUR", AccountType.CHECKING, BigDecimal.ZERO),
-                UUID.randomUUID());
+                owner());
 
         assertEquals(mine.id(), service.findByIdForOwner(mine.id(), owner).id());
 
@@ -124,7 +139,7 @@ class AccountServiceTest {
 
     @Test
     void depositAndWithdrawUpdateTheStoredBalance() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account account = service.create(
                 request("AS-" + UUID.randomUUID(), "EUR", AccountType.CHECKING,
                         new BigDecimal("100.00")),
@@ -143,7 +158,7 @@ class AccountServiceTest {
 
     @Test
     void withdrawBeyondBalanceThrowsAndLeavesBalanceUntouched() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account account = service.create(
                 request("AS-" + UUID.randomUUID(), "EUR", AccountType.CHECKING,
                         new BigDecimal("10.00")),
@@ -159,7 +174,7 @@ class AccountServiceTest {
 
     @Test
     void deleteRequiresZeroBalanceAndRemovesOwnedAccount() {
-        UUID owner = UUID.randomUUID();
+        UUID owner = owner();
         Account withBalance = service.create(
                 request("AS-" + UUID.randomUUID(), "EUR", AccountType.CHECKING,
                         new BigDecimal("10.00")),

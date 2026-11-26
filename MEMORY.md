@@ -2,6 +2,8 @@
 
 Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualizado: **2026-11-25**.
 
+> **Commits (verificado con `git log` en spec-11):** los 11 commits de las specs 00-10 **ya están ejecutados** (tabla con hashes y mensajes reales en "## Cierre de commits (spec-11)"). Las líneas "Sin commit: queda pendiente…" en secciones anteriores son **históricas** (cada sub agente las escribió antes de la aprobación; el SDD le prohíbe commitear). Igualmente son históricas las menciones a H2, al placeholder `openapi/bankaccount-0.0.yml`, a `LICENSE` inexistente y a la cobertura 90.24%: spec-11 las resolvió.
+
 ## Estado actual
 - Repo skeleton Micronaut 4.10.12 / Java 21 / Gradle wrapper 8.14.3. `rootProject.name="bankaccount"` (carpeta `bank_api`). Entrada `io.onstructive.micronaut.Application`.
 - Controllers: `AccountController` en `/api/accounts` (spec-03: `GET`, `POST`, `GET /{id}`, `DELETE /{id}`; dueño desde el claim `userId` del JWT; sin deposit/withdraw), `AuthController` en `/api/auth` (spec-02: `POST /register`, `POST /login`, `@PermitAll`) y `TransactionController` (spec-04, base `/api`: `POST /api/transactions/{deposit,withdraw,transfer}` y `GET /api/accounts/{accountId}/transactions`; `@Secured` + `@ExecuteOn(IO)`). La ruta legacy `/accounts` ya no existe.
@@ -37,7 +39,7 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - Lección: no usar `${VAR:jdbc:postgresql://host:5432/db}` en `application.properties` (Micronaut resolvió solo `5432/bank_api`); compose la URL con placeholders sin colon en el default.
 - Lección: Flyway 10.22.0 necesita `org.flywaydb:flyway-database-postgresql:10.22.0` para PostgreSQL 15, si no falla con `Unsupported Database: PostgreSQL 15.20`.
 - Sin FK entre tablas (fuera de alcance de la spec); H2 se conserva en el build pero ya no se usa.
-- Sin commit: queda pendiente la aprobación del orquestador (`feat(persistence): modelo de dominio y Flyway sobre PostgreSQL (spec-01)`).
+- (histórico) Sin commit: quedaba pendiente la aprobación del orquestador (`feat(persistence): modelo de dominio y Flyway sobre PostgreSQL (spec-01)`).
 
 ## Spec-02 — autenticación JWT (2026-11-25)
 - Dependencias: `io.micronaut.security:micronaut-security-jwt` (4.15.2) y `org.mindrot:jbcrypt:0.4`. No existe `micronaut-security-bcrypt` en Maven Central para Micronaut Security 4.
@@ -49,7 +51,7 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - Lección: `@MicronautTest` es `transactional=true` por defecto; con `HttpClient` hay que usar `@MicronautTest(transactional=false)` o el registro no se ve desde el login (distinta conexión JDBC).
 - Lección: `HttpClient.exchange` es reactivo; en tests usar `client.toBlocking().exchange(...)`.
 - `GlobalExceptionHandler` del skeleton permanece intacto (spec-05): el `AuthController` devuelve `HttpResponse` con estados explícitos (201/409/200/401) en lugar de lanzar excepciones.
-- Sin commit: queda pendiente `feat(auth): registro y login JWT (spec-02)`.
+- (histórico) Sin commit: quedaba pendiente `feat(auth): registro y login JWT (spec-02)`.
 
 ## Spec-03 — cuentas con dueño bajo `/api/accounts` (2026-11-25)
 - `AccountController` en `/api/accounts` con `@Secured(SecurityRule.IS_AUTHENTICATED)` y `@ExecuteOn(TaskExecutors.IO)`. Inyecta `Authentication` como parámetro (lo resuelve `AuthenticationArgumentBinder`) y lee `getAttributes().get("userId")`. Sin `@Secured`, Micronaut Security devuelve **403 incluso con JWT válido**: `SecuredAnnotationRule` reporta `UNKNOWN` y `SecurityFilter` lanza `AuthorizationException`. `@PermitAll` no sirve porque haría público el endpoint.
@@ -58,7 +60,7 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - `Authentication` en el JWT: `sub` = username, atributos `userId` (UUID en texto) y `email`. `getRoles()` de `AbstractSecurityRule` añade los pseudoroles `isAnonymous()`/`isAuthenticated()`, por lo que `SecurityRule.IS_AUTHENTICATED` funciona sin roles reales.
 - Lección: `/accounts` (sin ruta) con token devuelve 403, no 404, por el filtro de seguridad; el test de "ruta desaparecida" comprueba 4xx.
 - Lección: `HttpClient.exchange(HttpRequest, Argument.listOf(Account.class))` para obtener `HttpResponse<List<Account>>` tipado (con `List.class` solo se obtiene `HttpResponse<List>` sin genérico).
-- Sin commit: queda pendiente `feat(accounts): CRUD bajo /api/accounts con dueño desde JWT (spec-03)`.
+- (histórico) Sin commit: quedaba pendiente `feat(accounts): CRUD bajo /api/accounts con dueño desde JWT (spec-03)`.
 
 ## Spec-04 — transacciones ACID (2026-11-25)
 - `TransactionService` con `@Transactional(rollbackFor = Exception.class)` en deposit/withdraw/transfer y `@Transactional(readOnly = true)` en history. Cada operación de escritura: verificar propiedad → validar fondos → actualizar balances → guardar una `Transaction` (`COMPLETED`, `Instant.now()`) en la misma transacción. Excepción de dominio ⇒ rollback (balances y filas intactos, verificado por test con `count()` y balances leídos por HTTP).
@@ -67,7 +69,7 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - DTOs: `TransactionRequest`/`TransferRequest`/`TransactionResponse` (`@Serdeable`). `description` opcional; en la respuesta `fromAccount` es null en depósitos y `toAccount` en retiros. `TransactionResponse.from(Transaction)` centraliza el mapeo.
 - **Lección importante:** Micronaut Data 4.14.3 reconstruye los records de entidad con componentes NOT NULL por defecto. Los campos SQL nullable (`from_account_id`, `to_account_id`, `description`) necesitan `@Nullable` (`io.micronaut.core.annotation.Nullable`) en `model/Transaction.java`, o `findByFromAccountIdOrToAccountId` falla con `Null value read for non-null constructor argument [fromAccountId]`. Sin esto el historial es imposible. No requirió cambios de esquema (V1 ya los declaraba nullable).
 - `AccountService.deposit/withdraw` siguen sin filtrar por dueño pero ya no tienen rutas: la propiedad se impone en `TransactionService`. No se tocó auth, Flyway/V1/V2 ni `GlobalExceptionHandler` (spec-05).
-- Sin commit: queda pendiente `feat(transactions): depósitos, retiros y transferencias ACID (spec-04)`.
+- (histórico) Sin commit: quedaba pendiente `feat(transactions): depósitos, retiros y transferencias ACID (spec-04)`.
 
 ## Spec-05 — errores y validación (2026-11-25)
 - Payload único de error en `/api/**`: `{ "error", "message", "path", "timestamp", "fieldErrors"? }`. `fieldErrors` solo aparece en validación. El status va en la respuesta, no en el body. `timestamp` = `Instant.now()` ISO-8601.
@@ -76,7 +78,7 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - Servicios y controllers lanzan/dejan propagar excepciones de dominio: se eliminaron los `try/catch` que traducían a 4xx. Las comprobaciones `ownerId == null → 401`, `@Secured` y `@PermitAll` quedan intactas.
 - **Lección:** sin `io.micronaut.validation:micronaut-validation` + `micronaut-validation-processor` en `build.gradle.kts`, `@Valid` es un *no-op*: no hay `ConstraintViolationException` y no se puede producir `fieldErrors`. El handler integrado se llama `ConstraintExceptionHandler` (no `ConstraintViolationExceptionHandler`) y requiere `@Replaces` para ser sustituido.
 - **Resuelto:** `/api/auth/**` usa el payload único; criterio 1 OK.
-- Tests: `ErrorHandlingTest` (8 tests) + los 19 anteriores = **27 tests, 0 failures/errors**. Sin commit: queda pendiente `feat(errors): payload único y excepciones de dominio (spec-05)`.
+- Tests: `ErrorHandlingTest` (8 tests) + los 19 anteriores = **27 tests, 0 failures/errors**. (histórico) Sin commit: quedaba pendiente `feat(errors): payload único y excepciones de dominio (spec-05)`.
 
 ## Spec-06 — observabilidad (2026-11-25)
 - `micronaut-management` 4.10.21 + `endpoints.all.path=/actuator`. `/actuator/health` → 200 con `status=UP` y `details` visibles sin token (`endpoints.health.details-visible=ANONYMOUS`, `endpoints.health.sensitive=false`).
@@ -85,7 +87,7 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - `HealthController` público en `/health` devuelve `{"status":"UP"}`; `@PermitAll` + regla `isAnonymous()` en `intercept-url-map`.
 - Swagger: `/swagger-ui/**` y `/swagger/**` ya eran anonymous; `/swagger-ui.html` necesitó un alias de recurso estático (`swagger-ui-root`) apuntando al **directorio** `classpath:META-INF/swagger/views/swagger-ui` (el resolvedor añade `index.html` si la ruta extraída es vacía; apuntar al fichero da 404). `AuthController` lleva `@Tag("Auth")` + `@Operation`; el spec vivo está en `build/classes/java/main/META-INF/swagger/bank-account-api-1.0.yml` con las 8 rutas `/api/**`.
 - Logs: `net.logstash.logback:logstash-logback-encoder:8.1` con `LogstashEncoder` en `logback.xml`; nombres de campo `timestamp`, `level`, `logger`, `message` vía `<fieldNames>`. Un `LoggingEvent` creado a mano necesita `setLoggerContext(context)` para que el proveedor MDC del encoder no falle con NPE.
-- Tests: `HealthControllerTest` (5) + los 27 anteriores = **32 tests, 0 failures/errors**. Sin commit: queda pendiente `feat(observability): Swagger, health y logs JSON (spec-06)`.
+- Tests: `HealthControllerTest` (5) + los 27 anteriores = **32 tests, 0 failures/errors**. (histórico) Sin commit: quedaba pendiente `feat(observability): Swagger, health y logs JSON (spec-06)`.
 
 ## Spec-07 — rate limiting (2026-11-25)
 - `filter/RateLimitFilter` (`@Filter("/api/**")` + `HttpServerFilter`) con orden `ServerFilterPhase.SECURITY.after()` (39250): se ejecuta después de `SecurityFilter` para leer el principal del request. Tres ventanas fijas en memoria: IP/minuto, usuario autenticado/hora y transacciones/minuto; exceder cualquiera ⇒ 429 con `ErrorPayload` y `error=RATE_LIMIT_EXCEEDED`. **Corrección (petición del usuario):** el bucket de transacciones cubre `/api/transactions/**` **y** `GET /api/accounts/{accountId}/transactions` (helper `isTransactionPath`); ambas usan la misma clave (`user:<nombre>` o `ip:<ip>`), así que suman peticiones al mismo límite. Quedó eliminada la desviación anterior que dejaba el historial fuera.
@@ -94,7 +96,7 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - **Lección:** `SecurityFilter` publica el `Authentication` en el atributo del request `HttpAttributes.PRINCIPAL` (constante deprecada pero funcional en 4.10.21); por eso el filtro debe ir después de él. Alternativa no usada: `SecurityService`.
 - **Lección:** `HttpRequest.getRemoteAddress()` devuelve `InetSocketAddress` (nullable), no `Optional`; envolver con `Optional.ofNullable`. Se prefiere `X-Forwarded-For` como clave de IP (permite aislar tests con IPs sintéticas).
 - **Lección:** `src/test/resources/application-test.yml` (SnakeYAML en classpath) desactiva el filtro para los 32 tests existentes; las `@Property` de clase de `RateLimitTest` lo reactivan con límites pequeños. `RateLimitDisabledTest` va en clase aparte para no compartir contexto/contadores.
-- Tests: `RateLimitTest` (4: IP, usuario, transacciones y combinación depósito+historial) + `RateLimitDisabledTest` (1) + los 32 anteriores = **37 tests, 0 failures/errors**. Sin commit: queda pendiente `feat(ratelimit): filtro de rate limiting con 429 unificado (spec-07)`.
+- Tests: `RateLimitTest` (4: IP, usuario, transacciones y combinación depósito+historial) + `RateLimitDisabledTest` (1) + los 32 anteriores = **37 tests, 0 failures/errors**. (histórico) Sin commit: quedaba pendiente `feat(ratelimit): filtro de rate limiting con 429 unificado (spec-07)`.
 
 ## Spec-08 — suite completa y cobertura (2026-11-25)
 - `build.gradle.kts`: plugin `jacoco` con `toolVersion=0.8.13`. `jacocoTestReport` → HTML `build/reports/jacoco/test/html/index.html` + XML `build/reports/jacoco/test/jacocoTestReport.xml`; `jacocoTestCoverageVerification` → regla `BUNDLE` (`counter=LINE`, `COVEREDRATIO`, `minimum=0.70`) sobre `io.onstructive.micronaut.*`. Comando único: `./gradlew test jacocoTestReport jacocoTestCoverageVerification`.
@@ -102,7 +104,7 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - Tests nuevos: `AccountServiceTest` (8, servicio directo sobre BD real: create/duplicate/owner/deposit/withdraw/delete + excepciones de dominio), `TransactionServiceTest` (8, servicio directo: depósito/retiro/transferencia/historial + rollback verificado con `TransactionRepository.count()`), `BankApiIntegrationTest` (2 E2E: flujo register→login→2 cuentas→depósito→retiro→transferencia→historial→vaciar→borrar, y payloads 409/401/404/400 con `fieldErrors`). Total **55 tests, 0 failures/errors**.
 - Los tests de servicio usan `@MicronautTest(transactional=false)` para ver datos confirmados, igual que los HTTP. `@Transactional` de `TransactionService` sigue activo en el bean aunque el test no esté envuelto en transacción; por eso el rollback funciona.
 - **Desviaciones exigidas por la spec:** Testcontainers no usado (se comparte el contenedor Podman `bank-api-db`) y REST Assured no usado (se usa `Micronaut HttpClient` con `toBlocking().exchange`). Otras: `toolVersion` fijado a 0.8.13; regla de verificación por bundle (2 clases al 0%: `Application.main` y `AmountRequest`, fuera del flujo de negocio); `application-test.yml` mantiene `ratelimit.enabled=false` para que el E2E no reciba 429.
-- Sin commit: queda pendiente `test(coverage): suite de servicio/E2E y JaCoCo al 70% (spec-08)`.
+- (histórico) Sin commit: quedaba pendiente `test(coverage): suite de servicio/E2E y JaCoCo al 70% (spec-08)`.
 
 ## Spec-09 — empaquetado con Podman (2026-11-25)
 - `Dockerfile` multi-stage: build `eclipse-temurin:21-jdk` → `./gradlew --no-daemon --console=plain shadowJar`; final `eclipse-temurin:21-jre`, usuario no root `bankapi`, `COPY --from=build .../bankaccount-0.1-all.jar /app/bankaccount.jar`, `USER bankapi`, `ENV SERVER_PORT=8080`, `EXPOSE 8080`, `ENTRYPOINT ["java","-jar","/app/bankaccount.jar"]`. `.dockerignore` excluye `.git`, `.gradle`, `build/`, `.idea/` y similares (incluye `specs/` y `*.md`).
@@ -111,10 +113,40 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - Comandos: `podman pull docker.io/library/eclipse-temurin:21-jdk` y `...:21-jre` (una vez); `podman build -t bank-api:spec09 .`; `podman run -d --rm --name bank-api-smoke09 --network host -e SERVER_PORT=8080 bank-api:spec09`; `curl http://127.0.0.1:8080/health` → `200 {"status":"UP"}`; `podman stop bank-api-smoke09` (con `--rm` se autodestruye). Imagen resultante `localhost/bank-api:spec09` (~400 MB).
 - `--network host` es necesario en el smoke test porque el datasource apunta a `127.0.0.1:5432` (`bank-api-db` en el host). En producción: red compartida o `BANK_DB_HOST` adecuado. No se tocó `bank-api-db` ni otros contenedores/volúmenes.
 - **Desviaciones:** `./gradlew nativeImage` documentado como opcional pero **no ejecutado** (GraalVM no instalada; se entrega JVM fat JAR, no binario nativo). Imagen Ubuntu no alpine (~400 MB), sin optimizar. El build en contenedor descarga Gradle 8.14.3 y dependencias la primera vez (~2 min); los warnings SLF4J y `HttpAttributes.PRINCIPAL` deprecado aparecen pero no bloquean.
-- Verificado tras el cambio: 55 tests, 0 failures/errors, `jacocoTestCoverageVerification` OK y cobertura 90.24% líneas (305/338) sin cambios. Sin commit: queda pendiente `build(docker): imagen multi-stage y smoke test de /health (spec-09)`.
+- Verificado tras el cambio: 55 tests, 0 failures/errors, `jacocoTestCoverageVerification` OK y cobertura 90.24% líneas (305/338) sin cambios. (histórico) Sin commit: quedaba pendiente `build(docker): imagen multi-stage y smoke test de /health (spec-09)`.
 
 ## Cierre documental (spec-10, 2026-11-25)
 - `README.md` reescrito por completo; ahora documenta Micronaut Security (no Spring Security), Podman (no Docker), `application.properties` (no YAML), `/api/accounts` (no `/accounts` legacy), `/api/transactions/**` + `/api/accounts/{id}/transactions`, `BANK_DB_*`, `JWT_SECRET` (default solo dev), `SERVER_PORT`, `ratelimit.*`, payload único de errores + 429, `/health` y `/actuator/health`, logs JSON y empaquetado multi-stage. Ejemplos con UUIDs y records reales. Roadmap: `[x]` en "Tests completos"; `LICENSE` documentado como pendiente. Sin métricas no medidas (Performance solo cifras verificadas: JAR ~25 MB; nativeImage opcional/no ejecutado).
-- Cierre de specs y commits **pendientes de aprobación** (SDD prohíbe commitear al sub agente; ninguno se ejecutó): 00 `chore(build): bootstrap de entorno y andamiaje SDD (spec-00)`; 01 `feat(persistence): modelo de dominio y Flyway sobre PostgreSQL (spec-01)`; 02 `feat(auth): registro y login JWT (spec-02)`; 03 `feat(accounts): CRUD bajo /api/accounts con dueño desde JWT (spec-03)`; 04 `feat(transactions): depósitos, retiros y transferencias ACID (spec-04)`; 05 `feat(errors): payload único y excepciones de dominio (spec-05)`; 06 `feat(observability): Swagger, health y logs JSON (spec-06)`; 07 `feat(ratelimit): filtro de rate limiting con 429 unificado (spec-07)`; 08 `test(coverage): suite de servicio/E2E y JaCoCo al 70% (spec-08)`; 09 `build(docker): imagen multi-stage y smoke test de /health (spec-09)`; 10 `docs(readme): cierre documental del estado real (spec-10)`.
-- Desviaciones finales: Testcontainers y REST Assured **no usados** (Podman compartido + `Micronaut HttpClient`); rate limiting en memoria por instancia (no compartido entre réplicas, `HttpAttributes.PRINCIPAL` deprecado); `nativeImage` no ejecutado (sin GraalVM, fat JAR); imagen ~400 MB no alpine y smoke test con `--network host`; cobertura por bundle con `Application.main` y `AmountRequest` al 0% (global 90.24%, umbral 70% sin bajar); H2 en el build sin uso; `openapi/bankaccount-0.0.yml` placeholder obsoleto; `LICENSE` inexistente (pendiente); warnings no bloqueantes SLF4J y `unchecked`.
+- Cierre de specs 00-10 (histórico): en ese momento los commits estaban pendientes de aprobación. **Los 11 commits sí se ejecutaron después**; la tabla real con hashes y mensajes está en "## Cierre de commits (spec-11)" al final de este archivo. Los mensajes reales difieren de las sugerencias en spec-01 (`feat(db)`) y spec-10 (`docs`).
+- Desviaciones finales **en ese momento** (históricas; spec-11 resolvió varias): Testcontainers y REST Assured **no usados** (Podman compartido + `Micronaut HttpClient`); rate limiting en memoria por instancia; `nativeImage` no ejecutado (sin GraalVM, fat JAR); imagen ~400 MB no alpine y smoke test con `--network host`; cobertura por bundle; H2 en el build sin uso; `openapi/bankaccount-0.0.yml` placeholder obsoleto; `LICENSE` inexistente; warnings no bloqueantes SLF4J y `unchecked`. Estado actual en la sección spec-11.
 - Verificación final: `./gradlew test jacocoTestCoverageVerification --rerun-tasks --console=plain` → `BUILD SUCCESSFUL in 15s`, 7/7 tareas ejecutadas; 55 tests, 0 failures/errors en 12 clases; cobertura sin cambios (LINE 305/338 = 90.24%). `grep` de afirmaciones obsoletas: solo negaciones verdaderas y referencias reales a `Dockerfile`. `git status --short`: ` M README.md`, `?? specs/10-spec/`; **sin cambios en `src/` ni `build.gradle.kts`**. Sin commit.
+
+## Spec-11 — preparación para GitHub (2026-11-25)
+
+- **README portable:** sin rutas de esta máquina; `git clone https://github.com/Cesar-Plyed/bank_api.git`; JDK 21 vía `$JAVA_HOME`, Podman o PostgreSQL local con `BANK_DB_*`; árbol corregido (`logback.xml` en `src/main/resources/`, `LICENSE` existe, `V3__AddForeignKeys.sql`, sin `AmountRequest` ni placeholder). Cifras verificadas actualizadas: **55 tests, 90.50% líneas (305/337), 94.08% instrucciones**.
+- **LICENSE:** MIT, `Copyright (c) 2026 Cesar Plyed`. **H2 eliminado** de `build.gradle.kts`.
+- **FK (V3):** `accounts.owner_id → users(id)`; `transactions.from_account_id`/`to_account_id → accounts(id)` con `ON DELETE SET NULL` para no romper el `DELETE /api/accounts/{id}` → 204 del E2E (las filas de `Transaction` se conservan sin referencia). Sin `ON DELETE` en `accounts.owner_id`.
+- **Limpieza de BD autorizada:** borradas 88 cuentas huérfanas y 28 transacciones (4 con `from` inexistente, 4 con `to` inexistente y 20 que referenciaban cuentas de las 88). Antes 548/461/131; justo después 548/373/103; tras los tests 677/473/135. **0 huérfanos** en las 3 relaciones. El contenedor `bank-api-db` y su volumen siguen intactos, igual que los demás contenedores. IDs completos en `NOTES.md`.
+- **Desviación documentada:** las 20 transacciones adicionales no estaban en el conteo del orchestrator; sin borrarlas la FK de `transactions` fallaba. También se adaptaron los fixtures de `AccountServiceTest`/`TransactionServiceTest` (helper `owner()` que inserta un `User`) porque con la FK los dueños `UUID.randomUUID()` ya no son válidos; no cambió la lógica de negocio.
+- **Warning eliminado:** `RateLimitFilter` usa `request.getAttribute(SecurityFilter.AUTHENTICATION, Authentication.class)` (misma clave `micronaut.AUTHENTICATION`, mismo orden `SECURITY.after()`, mismos 429). `compileJava --rerun-tasks` sin `warning: [removal]`.
+- **Verificación:** `./gradlew test jacocoTestReport jacocoTestCoverageVerification` → `BUILD SUCCESSFUL in 13s`, 55 tests 0 fallos, ≥70% superado; `./gradlew shadowJar` → JAR 22M. Un primer intento falló por `BindException` transitorio en 8080 (sockets TIME_WAIT, sin listener): la segunda ejecución pasó.
+- **No se hizo commit** de spec-11 (regla SDD): sugerencia `chore(release): preparación para GitHub (spec-11)`.
+
+## Cierre de commits (spec-11)
+
+Verificado con `git log` (11 commits de specs; además los 2 iniciales del skeleton `0535ff7`/`aa6fdd3`):
+
+| Spec | Commit real | Mensaje real |
+| --- | --- | --- |
+| 00 | `544f500` | `chore(build): bootstrap de entorno y andamiaje SDD (spec-00)` |
+| 01 | `ffd8c9f` | `feat(db): modelo de dominio y migraciones (spec-01)` |
+| 02 | `a11dd4a` | `feat(auth): registro y login con JWT (spec-02)` |
+| 03 | `00e275d` | `feat(accounts): CRUD de cuentas con propietario (spec-03)` |
+| 04 | `13ac599` | `feat(transactions): operaciones ACID e historial (spec-04)` |
+| 05 | `268ea5c` | `feat(errors): payload único y excepciones de dominio (spec-05)` |
+| 06 | `d4408c9` | `feat(observability): Swagger, health y logs JSON (spec-06)` |
+| 07 | `e4f1609` | `feat(api): rate limiting por IP, usuario y transacciones (spec-07)` |
+| 08 | `7f019d6` | `test: suite completa y cobertura (spec-08)` |
+| 09 | `c298092` | `build(podman): imagen multi-stage y fat jar (spec-09)` |
+| 10 | `1b9668a` | `docs: README y notas al estado final (spec-10)` |
+

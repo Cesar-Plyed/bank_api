@@ -53,9 +53,9 @@ API REST para simulación bancaria construida con Micronaut 4.10.12 y Java 21. C
 
 ### Base de Datos
 - PostgreSQL 15 en Podman, acceso JDBC con Hikari.
-- Flyway es el único dueño del esquema (`datasources.default.schema-generate=NONE`), con migraciones `V1__CreateTables.sql` y `V2__AddIndexes.sql`.
+- Flyway es el único dueño del esquema (`datasources.default.schema-generate=NONE`), con migraciones `V1__CreateTables.sql`, `V2__AddIndexes.sql` y `V3__AddForeignKeys.sql`.
 - `@Transactional` por operación de escritura: fondos insuficientes o cuenta ajena revierten cambios y no dejan filas de `Transaction`.
-- Índices sobre `owner_id` y columnas de `transactions` (ver `V2__AddIndexes.sql`).
+- Índices sobre `owner_id` y columnas de `transactions` (`V2__AddIndexes.sql`) y claves foráneas sobre `owner_id`, `from_account_id` y `to_account_id` (`V3__AddForeignKeys.sql`).
 
 ### API Profesional
 - Swagger UI anónima en `/swagger-ui.html` y `/swagger-ui/**`; especificación YAML servida en `/swagger/**`.
@@ -108,18 +108,24 @@ TESTING
 
 ### Prerequisitos
 
+- **JDK 21** (por ejemplo Temurin) con `JAVA_HOME` apuntando a la instalación y `$JAVA_HOME/bin` en el `PATH`.
+- **Podman** (o un PostgreSQL 15 local accesible vía `BANK_DB_*`) para la base de datos.
+- Git para clonar el repositorio.
+
 ```bash
-# JDK 21 (esta máquina no tiene java en PATH)
-export JAVA_HOME=/home/void/AI/apps/jdk-21
+git clone https://github.com/Cesar-Plyed/bank_api.git
+cd bank_api
+
+export JAVA_HOME=/ruta/a/tu/jdk-21
 export PATH="$JAVA_HOME/bin:$PATH"
 
-# Podman 6.1.4 (no Docker) para la base de datos
-podman --version
+java -version       # debe ser Java 21
+podman --version    # opcional si usas PostgreSQL local
 ```
 
-No hay PostgreSQL instalado en el host: se usa un contenedor Podman. Gradle se ejecuta mediante el wrapper incluido (`./gradlew`), que descarga la distribución 8.14.3 la primera vez.
+Gradle se ejecuta mediante el wrapper incluido (`./gradlew`), que descarga la distribución 8.14.3 la primera vez.
 
-### 1. Arrancar PostgreSQL 15 en Podman
+### 1. Arrancar PostgreSQL 15 en Podman (o usar uno local)
 
 ```bash
 podman pull docker.io/library/postgres:15   # una sola vez
@@ -131,18 +137,17 @@ podman run -d --name bank-api-db \
   docker.io/library/postgres:15
 
 podman ps
-podman exec bank-api-db psql -U bank_user -d bank_api -c '\dt'   # V1/V2 aplicadas por Flyway
+podman exec bank-api-db psql -U bank_user -d bank_api -c '\dt'   # V1/V2/V3 aplicadas por Flyway
 ```
 
-El esquema lo crea Flyway en el primer arranque de la app (`schema-generate=NONE`). Parar/reiniciar: `podman stop bank-api-db` / `podman start bank-api-db`. **No borrar el contenedor ni su volumen.**
+Si ya tienes PostgreSQL 15 en local, omite el contenedor y ajusta `BANK_DB_HOST`/`BANK_DB_PORT`/`BANK_DB_NAME`/`BANK_DB_USER`/`BANK_DB_PASSWORD` (o el puerto mapeado) para que apunte a él.
+
+El esquema lo crea Flyway en el primer arranque de la app (`schema-generate=NONE`): `V1__CreateTables.sql`, `V2__AddIndexes.sql` y `V3__AddForeignKeys.sql`. Parar/reiniciar: `podman stop bank-api-db` / `podman start bank-api-db`. **No borrar el contenedor ni su volumen.**
 
 ### 2. Ejecutar tests y arrancar la app
 
 ```bash
-export JAVA_HOME=/home/void/AI/apps/jdk-21
-export PATH="$JAVA_HOME/bin:$PATH"
-
-./gradlew test                                   # 55 tests, requiere bank-api-db activo
+./gradlew test                                   # 55 tests, requiere la BD activa
 ./gradlew test jacocoTestReport jacocoTestCoverageVerification   # + reporte de cobertura
 
 # Definir un secreto JWT propio (el default solo es de desarrollo)
@@ -191,7 +196,7 @@ bank_api/
 │   │   │   │   ├── LoginResponse.java, UserResponse.java
 │   │   │   │   ├── CreateAccountRequest.java
 │   │   │   │   ├── TransactionRequest.java, TransferRequest.java
-│   │   │   │   ├── TransactionResponse.java, AmountRequest.java
+│   │   │   │   └── TransactionResponse.java
 │   │   │   ├── repository/
 │   │   │   │   ├── UserRepository.java, AccountRepository.java
 │   │   │   │   └── TransactionRepository.java   # todos con Dialect.POSTGRES
@@ -209,22 +214,22 @@ bank_api/
 │   │   └── resources/
 │   │       ├── application.properties           # configuración real (no YAML)
 │   │       ├── logback.xml                      # logs JSON
-│   │       ├── openapi/bankaccount-0.0.yml       # placeholder obsoleto
 │   │       └── db/migration/
 │   │           ├── V1__CreateTables.sql
-│   │           └── V2__AddIndexes.sql
+│   │           ├── V2__AddIndexes.sql
+│   │           └── V3__AddForeignKeys.sql
 │   └── test/
 │       ├── java/io/onstructive/micronaut/       # 12 clases de test (55 tests)
 │       └── resources/application-test.yml       # ratelimit.enabled=false
-├── specs/                                       # specs SDD 00..10 (spec-NN.md + agent.md)
+├── specs/                                       # specs SDD 00..11 (spec-NN.md + agent.md)
 ├── build.gradle.kts, settings.gradle.kts, gradle.properties
 ├── Dockerfile, .dockerignore
-├── logback.xml, openapi.properties
+├── openapi.properties
 ├── AGENTS.md, NOTES.md, MEMORY.md, README.md
-└── LICENSE                                      # NO existe todavía (pendiente)
+└── LICENSE                                      # MIT (Copyright (c) 2026 Cesar Plyed)
 ```
 
-El spec OpenAPI de verdad se genera en `build/classes/java/main/META-INF/swagger/bank-account-api-1.0.yml`; `src/main/resources/openapi/bankaccount-0.0.yml` es un placeholder obsoleto y no es fuente de verdad.
+`logback.xml` vive en `src/main/resources/`. El spec OpenAPI de verdad se genera en `build/classes/java/main/META-INF/swagger/bank-account-api-1.0.yml` y se sirve en `/swagger/**`; no hay un YAML de verdad versionado en `src/main/resources/openapi/`.
 
 ---
 
@@ -453,7 +458,7 @@ public Transaction transfer(UUID fromId, UUID toId, BigDecimal amount, UUID owne
 }
 ```
 
-No se usan FK entre tablas (decisión de diseño fuera de alcance); `owner_id`, `from_account_id` y `to_account_id` son `UUID`.
+Desde `V3__AddForeignKeys.sql` hay tres FK: `accounts.owner_id → users(id)` y `transactions.from_account_id`/`to_account_id → accounts(id)`. Las dos de `transactions` son `ON DELETE SET NULL` para que borrar una cuenta vacía (`DELETE /api/accounts/{id}` → 204) no falle por historial previo y conserve las filas de `Transaction`.
 
 ---
 
@@ -511,13 +516,13 @@ Clases de test: `BankaccountTest` (smoke), `RepositoryTest`, `AuthControllerTest
 
 | Contador | Cubiertos | Total | Porcentaje |
 | --- | --- | --- | --- |
-| Línea | 305 | 338 | **90.24%** |
-| Instrucción | 1512 | 1613 | 93.74% |
+| Línea | 305 | 337 | **90.50%** |
+| Instrucción | 1511 | 1606 | 94.08% |
 | Rama | 84 | 112 | 75.00% |
 
 Reportes: `build/reports/jacoco/test/html/index.html` y `build/reports/jacoco/test/jacocoTestReport.xml`.
 
-**Desviaciones:** Testcontainers no se usa (se comparte el contenedor Podman `bank-api-db`) y REST Assured no se usa (se usa `Micronaut HttpClient` con `toBlocking()`). Dos clases quedan al 0% de líneas (`Application.main` y el DTO `AmountRequest`, fuera del flujo de negocio), pero la verificación es por bundle y el global supera el umbral.
+**Desviaciones:** Testcontainers no se usa (se comparte el contenedor Podman `bank-api-db`) y REST Assured no se usa (se usa `Micronaut HttpClient` con `toBlocking()`). La clase `Application.main` queda al 0% de líneas (fuera del flujo de negocio), pero la verificación es por bundle y el global supera el umbral.
 
 ---
 
@@ -550,7 +555,7 @@ No se publican cifras de latencia, memoria ni throughput: **no fueron medidas**.
 - Micronaut 4.10.12 sobre Netty; `TaskExecutors.IO` en los controllers con acceso JDBC.
 - Pool Hikari para PostgreSQL y índices en `V2__AddIndexes.sql` (`owner_id`, columnas de `transactions`).
 - Fat JAR ejecutable sobre JRE (~25 MB, tamaño medido del artefacto).
-- Compilación nativa GraalVM (`./gradlew nativeImage`) queda como **opcional y no ejecutada**: esta máquina solo tiene Temurin 21, se distribuye el fat JAR, no un binario nativo. Tampoco se midió el arranque de la imagen nativa.
+- Compilación nativa GraalVM (`./gradlew nativeImage`) queda como **opcional y no ejecutada**: requiere GraalVM (no incluida en el prerequisito JDK 21), se distribuye el fat JAR, no un binario nativo. Tampoco se midió el arranque de la imagen nativa.
 
 ---
 
@@ -565,7 +570,7 @@ No se publican cifras de latencia, memoria ni throughput: **no fueron medidas**.
 | `400 INSUFFICIENT_FUNDS` | Balance insuficiente en la cuenta. |
 | `404 NOT_FOUND` | Cuenta inexistente o ajena al `userId` del JWT. |
 | `429 RATE_LIMIT_EXCEEDED` | Se superó alguna ventana; esperar a que se reinicie el bucket (en memoria). |
-| `./gradlew` falla al arrancar | Exportar `JAVA_HOME=/home/void/AI/apps/jdk-21` y añadir `$JAVA_HOME/bin` al `PATH`. |
+| `./gradlew` falla al arrancar | Comprobar `java -version` (debe ser 21), exportar `JAVA_HOME` apuntando a tu JDK 21 y añadir `$JAVA_HOME/bin` al `PATH`. |
 
 ---
 
@@ -576,7 +581,7 @@ No se publican cifras de latencia, memoria ni throughput: **no fueron medidas**.
 - [x] Transacciones (depósito, retiro, transferencia)
 - [x] Swagger UI
 - [x] Flyway migrations
-- [x] Tests completos (JUnit 5 + Micronaut HttpClient + JaCoCo; 55 tests, 90.24% líneas)
+- [x] Tests completos (JUnit 5 + Micronaut HttpClient + JaCoCo; 55 tests, 90.50% líneas)
 - [ ] Refresh tokens
 - [ ] Auditoría de transacciones
 - [ ] API versioning
@@ -596,4 +601,4 @@ El desarrollo sigue SDD: cada spec vive en `specs/NN-spec/` con `spec-NN.md` y `
 
 ## Licencia
 
-**Pendiente:** no existe archivo `LICENSE` en el repo. La mención anterior a "MIT License" no estaba respaldada por ningún fichero; se documenta aquí como tarea pendiente en lugar de inventar una licencia.
+MIT License — Copyright (c) 2026 Cesar Plyed. El texto completo está en [`LICENSE`](LICENSE). Se permite usar, copiar, modificar, distribuir y vender el software, incluido el uso comercial, con la única condición de conservar el aviso de copyright y el texto de la licencia. El software se entrega "tal cual", sin garantía.

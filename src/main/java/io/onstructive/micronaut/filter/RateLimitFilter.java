@@ -2,7 +2,6 @@ package io.onstructive.micronaut.filter;
 
 import io.micronaut.context.annotation.Value;
 import io.micronaut.core.async.publisher.Publishers;
-import io.micronaut.http.HttpAttributes;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpStatus;
 import io.micronaut.http.MutableHttpResponse;
@@ -12,6 +11,7 @@ import io.micronaut.http.filter.HttpServerFilter;
 import io.micronaut.http.filter.ServerFilterChain;
 import io.micronaut.http.filter.ServerFilterPhase;
 import io.micronaut.security.authentication.Authentication;
+import io.micronaut.security.filters.SecurityFilter;
 import io.onstructive.micronaut.exception.ErrorPayload;
 import java.util.Map;
 import java.util.Optional;
@@ -102,9 +102,14 @@ public class RateLimitFilter implements HttpServerFilter {
                 || (path.startsWith(ACCOUNTS_PREFIX) && path.endsWith(HISTORY_SUFFIX));
     }
 
-    /** El usuario autenticado (nombre del JWT), o {@code null} si es anónimo. */
+    /**
+     * El usuario autenticado (nombre del JWT), o {@code null} si es anónimo.
+     * {@link SecurityFilter#AUTHENTICATION} es la clave canónica donde
+     * {@code SecurityFilter} publica el {@link Authentication}; sustituye al
+     * deprecado {@code HttpAttributes.PRINCIPAL} sin cambiar el atributo leído.
+     */
     private String authenticatedUser(HttpRequest<?> request) {
-        return request.getAttribute(HttpAttributes.PRINCIPAL.toString(), Authentication.class)
+        return request.getAttribute(SecurityFilter.AUTHENTICATION, Authentication.class)
                 .map(Authentication::getName)
                 .orElse(null);
     }
