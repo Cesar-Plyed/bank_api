@@ -142,3 +142,60 @@ Seguimiento de avance, cambios e incidencias. Fecha de hoy: **2026-11-25**.
 4. `@ExecuteOn(TaskExecutors.IO)` se añadió al controller para no ejecutar JDBC en el event loop (misma convención que `AuthController`). Pequeña mejora no pedida literalmente por la spec.
 5. `GlobalExceptionHandler` (spec-05) sigue intacto: el controller traduce sus propias excepciones a 404/400 sin manejo global.
 6. Contenedor `bank-api-db` dejado activo; no se borró nada. Las filas de prueba quedan en la BD (convención ya aceptada). No se hizo commit (regla SDD): sugerencia `feat(accounts): CRUD bajo /api/accounts con dueño desde JWT (spec-03)`.
+
+## 2026-11-25 — spec-04: Transacciones ACID en `/api/transactions`
+
+**Acciones realizadas:**
+- DTOs `@Serdeable` nuevos en `dto/`: `TransactionRequest` (`accountId`, `amount`, `description`), `TransferRequest` (`fromAccountId`, `toAccountId`, `amount`, `description`) y `TransactionResponse` (`id`, `fromAccount`, `toAccount`, `amount`, `type`, `status`, `timestamp`, `description`). `description` es opcional (`@Nullable`) y en `TransactionResponse` también lo son `fromAccount` (depósito) y `toAccount` (retiro). `amount` con `@NotNull @Positive`.
+- `service/TransactionService.java` (nuevo): `deposit`, `withdraw`, `transfer` con `@Transactional(rollbackFor = Exception.class)` y `history` con `@Transactional(readOnly = true)`. Comprueba propiedad con `AccountRepository.findById(...).filter(a -> a.ownerId().equals(ownerId))`: cuenta ajena o inexistente lanza `IllegalArgumentException` → 404. Fondos insuficientes (y transferencia a la misma cuenta) lanzan `IllegalStateException` → 400. Cada operación actualiza balances y guarda exactamente una `Transaction` con `status=COMPLETED`, `type` acorde e `Instant.now()`, todo en la misma transacción.
+- `controller/TransactionController.java` (nuevo): `@Controller("/api")` con `@Secured(SecurityRule.IS_AUTHENTICATED)` y `@ExecuteOn(TaskExecutors.IO)`. Rutas exactas: `POST /api/transactions/deposit`, `POST /api/transactions/withdraw`, `POST /api/transactions/transfer` (201 `TransactionResponse`) y `GET /api/accounts/{accountId}/transactions` (200 `List<TransactionResponse>`). El `ownerId` se lee del claim `userId` del JWT. Traducción de errores de dominio: `IllegalArgumentException` → 404, `IllegalStateException` → 400, sin claim → 401. La base `/api` permite publicar la ruta de historial bajo `/api/accounts` desde el mismo controller.
+- Ajuste mínimo en `model/Transaction.java`: `@Nullable` (io.micronaut.core.annotation) en `fromAccountId`, `toAccountId` y `description` (ver incidencia 1). Sin cambios en migraciones, auth ni manejo global de errores.
+- `TransactionControllerTest.java` (nuevo, `@MicronautTest(transactional=false)`): 7 tests HTTP con JWT real — depósito, retiro, transferencia, historial en ambos sentidos, fondos insuficientes sin cambios (rollback verificado comparando balances por HTTP y `TransactionRepository.count()` antes/después), cuenta ajena → 404 en las 4 rutas sin cambios, y sin token → 401 en las 4 rutas. Registro + login reales y sufijos UUID para no colisionar con filas previas.
+- OpenAPI generado verificado: las 4 rutas aparecen literalmente en `build/classes/java/main/META-INF/swagger/bank-account-api-1.0.yml`.
+
+**Verificación (salida literal):**
+- `./gradlew test --tests "*Transaction*Test" --console=plain` (tras el arreglo):
+  ```
+  > Task :compileJava
+  SLF4J(W): No SLF4J providers were found.
+  SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+  SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+  Note: Generating OpenAPI Documentation
+  Note: Writing OpenAPI file to destination: /home/void/AI/projects/bank_api/build/classes/java/main/META-INF/swagger/bank-account-api-1.0.yml
+  > Task :processResources UP-TO-DATE
+  > Task :classes
+  > Task :compileTestJava
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources NO-SOURCE
+  > Task :testClasses
+  > Task :test
+
+  BUILD SUCCESSFUL in 5s
+  5 actionable tasks: 3 executed, 2 up-to-date
+  ```
+- `./gradlew test --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+  > Task :compileTestJava UP-TO-DATE
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources NO-SOURCE
+  > Task :testClasses UP-TO-DATE
+  > Task :test
+
+  BUILD SUCCESSFUL in 6s
+  5 actionable tasks: 1 executed, 4 up-to-date
+  ```
+- XML de resultados: `AccountControllerTest: tests=6 skipped=0 failures=0 errors=0`; `AuthControllerTest: tests=4 skipped=0 failures=0 errors=0`; `BankaccountTest: tests=1 skipped=0 failures=0 errors=0`; `RepositoryTest: tests=1 skipped=0 failures=0 errors=0`; `TransactionControllerTest: tests=7 skipped=0 failures=0 errors=0` (**19 tests, 0 failures/errors**).
+
+**Incidencias y desviaciones:**
+1. **Bloqueante resuelto con cambio mínimo:** el primer `./gradlew test --tests "*Transaction*Test"` falló 1 de 7 tests (`historyReturnsMovementsInBothDirections`) con `Error executing SQL Query: SELECT ... FROM "transactions" ... Null value read for non-null constructor argument [fromAccountId] of type: io.onstructive.micronaut.model.Transaction`. Micronaut Data 4.14.3 trata los componentes del record `Transaction` como NOT NULL al reconstruir la entidad desde SQL; los depósitos tienen `from_account_id=NULL` y las operaciones sin descripción tienen `description=NULL`. Se añadió `@Nullable` (io.micronaut.core.annotation) a `fromAccountId`, `toAccountId` y `description` en `model/Transaction.java` (archivo de spec-01). Sin cambios de esquema: las columnas ya eran nullable en V1. Tras el arreglo, 7/7 tests pasan. Es la única desviación respecto a la lista literal de archivos permitidos; se documenta porque sin ella la ruta de historial exigida por la spec es imposible.
+2. `TransactionController` usa `@Controller("/api")` en vez de `@Controller("/api/transactions")`: la spec exige además `GET /api/accounts/{accountId}/transactions`, que no cabe bajo esa base. Con `/api` y rutas relativas completas se publican las 4 rutas exactas con un único controller (verificado en el OpenAPI generado). No se tocó `AccountController`.
+3. La transferencia a cuenta ajena se rechaza (404) aunque la cuenta destino exista: la spec lo exige literalmente ("cuenta destino ajena/inexistente"). Por el mismo motivo, `history` exige propiedad de la cuenta consultada → 404 si es ajena.
+4. Se añadió una guarda para `fromAccountId == toAccountId` (`IllegalStateException` → 400) para evitar doble actualización del mismo balance. Pequeña validación adicional no pedida literalmente.
+5. `@Transactional(rollbackFor = Exception.class)` se fijó explícitamente para garantizar rollback de las excepciones de dominio más allá del comportamiento por defecto del interceptor. El rollback quedó verificado por test (balances y `count()` intactos tras 4xx).
+6. `AccountService.deposit/withdraw` se dejaron intactos (sin filtro de dueño) porque ya no tienen rutas que los invoquen; la propiedad se impone en el nuevo `TransactionService`, como pedía la spec. No se modificó auth, migraciones ni `GlobalExceptionHandler` (spec-05).
+7. Las filas de prueba quedan en la BD (convención ya aceptada). Contenedor `bank-api-db` dejado activo; no se borró nada. Warning SLF4J sin providers sigue apareciendo, no bloqueante.
+
+**No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(transactions): depósitos, retiros y transferencias ACID (spec-04)`.

@@ -4,11 +4,11 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 
 ## Estado actual
 - Repo skeleton Micronaut 4.10.12 / Java 21 / Gradle wrapper 8.14.3. `rootProject.name="bankaccount"` (carpeta `bank_api`). Entrada `io.onstructive.micronaut.Application`.
-- Controllers: `AccountController` en `/api/accounts` (spec-03: `GET`, `POST`, `GET /{id}`, `DELETE /{id}`; dueño desde el claim `userId` del JWT; sin deposit/withdraw) y `AuthController` en `/api/auth` (spec-02: `POST /register`, `POST /login`, `@PermitAll`). La ruta legacy `/accounts` ya no existe.
+- Controllers: `AccountController` en `/api/accounts` (spec-03: `GET`, `POST`, `GET /{id}`, `DELETE /{id}`; dueño desde el claim `userId` del JWT; sin deposit/withdraw), `AuthController` en `/api/auth` (spec-02: `POST /register`, `POST /login`, `@PermitAll`) y `TransactionController` (spec-04, base `/api`: `POST /api/transactions/{deposit,withdraw,transfer}` y `GET /api/accounts/{accountId}/transactions`; `@Secured` + `@ExecuteOn(IO)`). La ruta legacy `/accounts` ya no existe.
 - Seguridad **activada** (spec-02, propiedad en spec-03): `micronaut.security.enabled=true`, JWT HS256 con `JWT_SECRET` (default dev ≥32 bytes, **definir siempre en producción**), expiración 3600 s. `/api/auth/**` público; `/api/accounts` con `@Secured(SecurityRule.IS_AUTHENTICATED)` y filtro por `userId`. Swagger sigue anonymous. Contraseñas BCrypt 10 rondas.
 - Persistencia (spec-01): PostgreSQL 15 en Podman rootless (`127.0.0.1:5432`, db `bank_api`, usuario `bank_user`, password `bank_pass`). Tres repositorios con `Dialect.POSTGRES`. **`datasources.default.schema-generate=NONE`**: Flyway es dueño del esquema con `V1__CreateTables.sql` y `V2__AddIndexes.sql`.
 - Configuración real: `application.properties`, `logback.xml`, `openapi.properties`. `src/main/resources/openapi/bankaccount-0.0.yml` es placeholder obsoleto; no es fuente de verdad.
-- Tests: `BankaccountTest` (smoke `@MicronautTest`) + `RepositoryTest` (spec-01) + `AuthControllerTest` (spec-02, 4 tests HTTP) + `AccountControllerTest` (spec-03, 6 tests HTTP con JWT real). `./gradlew test` pasa con la BD de Podman activa (2026-11-25): 12 tests, 0 failures/errors.
+- Tests: `BankaccountTest` (smoke `@MicronautTest`) + `RepositoryTest` (spec-01) + `AuthControllerTest` (spec-02, 4 tests HTTP) + `AccountControllerTest` (spec-03, 6 tests HTTP con JWT real) + `TransactionControllerTest` (spec-04, 7 tests HTTP con JWT real). `./gradlew test` pasa con la BD de Podman activa (2026-11-25): 19 tests, 0 failures/errors.
 - `README.md` describe el objetivo, no el código implementado. El estado real prevalece: verifica `src/` antes de asumir endpoints.
 
 ## Entorno (spec-00)
@@ -59,3 +59,12 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - Lección: `/accounts` (sin ruta) con token devuelve 403, no 404, por el filtro de seguridad; el test de "ruta desaparecida" comprueba 4xx.
 - Lección: `HttpClient.exchange(HttpRequest, Argument.listOf(Account.class))` para obtener `HttpResponse<List<Account>>` tipado (con `List.class` solo se obtiene `HttpResponse<List>` sin genérico).
 - Sin commit: queda pendiente `feat(accounts): CRUD bajo /api/accounts con dueño desde JWT (spec-03)`.
+
+## Spec-04 — transacciones ACID (2026-11-25)
+- `TransactionService` con `@Transactional(rollbackFor = Exception.class)` en deposit/withdraw/transfer y `@Transactional(readOnly = true)` en history. Cada operación de escritura: verificar propiedad → validar fondos → actualizar balances → guardar una `Transaction` (`COMPLETED`, `Instant.now()`) en la misma transacción. Excepción de dominio ⇒ rollback (balances y filas intactos, verificado por test con `count()` y balances leídos por HTTP).
+- Ownership: `owned(id, ownerId)` usa `findById` + `filter(ownerId)`. Cuenta ajena o inexistente ⇒ `IllegalArgumentException` ⇒ 404. Fondos insuficientes ⇒ `IllegalStateException` ⇒ 400. Sin JWT ⇒ 401 (filtro de seguridad).
+- `TransactionController` con `@Controller("/api")`: así una sola clase publica `/api/transactions/*` y `/api/accounts/{accountId}/transactions` con las rutas exactas de la spec. `@Secured(SecurityRule.IS_AUTHENTICATED)` imprescindible (si no, 403). Dueño leído del claim `userId` del JWT, nunca del body.
+- DTOs: `TransactionRequest`/`TransferRequest`/`TransactionResponse` (`@Serdeable`). `description` opcional; en la respuesta `fromAccount` es null en depósitos y `toAccount` en retiros. `TransactionResponse.from(Transaction)` centraliza el mapeo.
+- **Lección importante:** Micronaut Data 4.14.3 reconstruye los records de entidad con componentes NOT NULL por defecto. Los campos SQL nullable (`from_account_id`, `to_account_id`, `description`) necesitan `@Nullable` (`io.micronaut.core.annotation.Nullable`) en `model/Transaction.java`, o `findByFromAccountIdOrToAccountId` falla con `Null value read for non-null constructor argument [fromAccountId]`. Sin esto el historial es imposible. No requirió cambios de esquema (V1 ya los declaraba nullable).
+- `AccountService.deposit/withdraw` siguen sin filtrar por dueño pero ya no tienen rutas: la propiedad se impone en `TransactionService`. No se tocó auth, Flyway/V1/V2 ni `GlobalExceptionHandler` (spec-05).
+- Sin commit: queda pendiente `feat(transactions): depósitos, retiros y transferencias ACID (spec-04)`.

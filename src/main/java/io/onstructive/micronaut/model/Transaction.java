@@ -1,5 +1,6 @@
 package io.onstructive.micronaut.model;
 
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.annotation.Id;
 import io.micronaut.data.annotation.MappedEntity;
 import io.micronaut.serde.annotation.Serdeable;
@@ -13,11 +14,11 @@ import java.util.UUID;
 @MappedEntity("transactions")
 public record Transaction(
     @Id UUID id,
-    UUID fromAccountId,
-    UUID toAccountId,
+    @Nullable UUID fromAccountId,
+    @Nullable UUID toAccountId,
     @Positive BigDecimal amount,
     @NotNull TransactionType type,
     @NotNull TransactionStatus status,
     @NotNull Instant timestamp,
-    String description
+    @Nullable String description
 ) {}
