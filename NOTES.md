@@ -518,3 +518,76 @@ Reporte HTML generado en `build/reports/jacoco/test/html/index.html` y XML en `b
 6. Las filas de prueba quedan en la BD (convención ya aceptada). Contenedor `bank-api-db` dejado activo; no se borró nada. No se tocaron migraciones, seguridad, specs ajenas ni se hizo empaquetado (spec-09).
 
 **No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `test(coverage): suite de servicio/E2E y JaCoCo al 70% (spec-08)`.
+
+## 2026-11-25 — spec-09: Empaquetado con Podman
+
+**Acciones realizadas:**
+- `Dockerfile` (nuevo): multi-stage. Etapa `build` sobre `docker.io/library/eclipse-temurin:21-jdk`, `WORKDIR /workspace`, copia `gradlew`, `gradle/wrapper`, `settings.gradle.kts`, `build.gradle.kts`, `gradle.properties`, `openapi.properties` y `src`, y ejecuta `chmod +x gradlew && ./gradlew --no-daemon --console=plain shadowJar`. Etapa final sobre `docker.io/library/eclipse-temurin:21-jre`: crea el usuario del sistema `bankapi`, copia el JAR como `/app/bankaccount.jar`, `USER bankapi`, `ENV SERVER_PORT=8080`, `EXPOSE 8080`, `ENTRYPOINT ["java","-jar","/app/bankaccount.jar"]`.
+- `.dockerignore` (nuevo): excluye `.git`, `.gitignore`, `.gradle`, `build/`, `target/`, `out/`, `.micronaut/`, `.idea/`, `.vscode/`, `*.iml/*.ipr/*.iws`, `*.log`, `specs/` y los `*.md` del contexto.
+- `src/main/resources/application.properties`: nueva propiedad `micronaut.server.port=${SERVER_PORT:8080}` (justo bajo `micronaut.application.name`) para poder mapear otro puerto sin reconstruir la imagen. Resto de propiedades intacto.
+- Imágenes base descargadas una vez: `podman pull docker.io/library/eclipse-temurin:21-jdk` y `podman pull docker.io/library/eclipse-temurin:21-jre` (solo había 25-jdk/25-jre en caché).
+- Imagen construida y etiquetada `localhost/bank-api:spec09` (ID `35047d035319`, ~400 MB). No se tocó `bank-api-db` ni ningún otro contenedor/volumen.
+
+**Comandos de build y run (documentados también en `AGENTS.md` y `MEMORY.md`):**
+```bash
+export JAVA_HOME=/home/void/AI/apps/jdk-21
+export PATH="$JAVA_HOME/bin:$PATH"
+./gradlew shadowJar                      # build/libs/bankaccount-0.1-all.jar (~25 MB)
+podman build -t bank-api:spec09 .
+podman run -d --rm --name bank-api-smoke09 --network host -e SERVER_PORT=8080 bank-api:spec09
+curl http://127.0.0.1:8080/health        # 200 {"status":"UP"}
+podman stop bank-api-smoke09             # --rm lo elimina automáticamente
+# Opcional, NO ejecutado: ./gradlew nativeImage  (requiere GraalVM, no instalada)
+```
+
+**Verificación (salida literal):**
+- `./gradlew --no-daemon shadowJar --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources
+  > Task :classes
+  > Task :shadowJar
+
+  BUILD SUCCESSFUL in 11s
+  3 actionable tasks: 2 executed, 1 up-to-date
+  === build/libs ===
+  total 24652
+  -rw-r--r-- 1 void void 25234697 nov 25 20:57 bankaccount-0.1-all.jar
+  ```
+- `podman build -t bank-api:spec09 .` (fin de la salida):
+  ```
+  [1/2] STEP 6/6: RUN chmod +x gradlew && ./gradlew --no-daemon --console=plain shadowJar
+  ...
+  BUILD SUCCESSFUL in 2m 7s
+  [2/2] STEP 9/9: ENTRYPOINT ["java", "-jar", "/app/bankaccount.jar"]
+  [2/2] COMMIT bank-api:spec09
+  --> 35047d035319
+  Successfully tagged localhost/bank-api:spec09
+  35047d035319ba6b6cce6a963bc2177dc2d674c75cb0200e7e88ffce90f862d0
+  ```
+- Smoke test (`podman run -d --rm --name bank-api-smoke09 --network host -e SERVER_PORT=8080 bank-api:spec09` → ID `161af3d2fd6b...`):
+  ```
+  === poll /health ===
+  intento 1: HTTP 000
+  intento 2: HTTP 200 {"status":"UP"}
+  ```
+  Log del contenedor: `{"timestamp":"2026-11-26T03:00:28...","message":"Response 200 - GET /health",...}` y `Authorized request GET /health ...`.
+- `podman stop bank-api-smoke09` → `bank-api-smoke09`; `podman ps -a` ya no lista el contenedor temporal (`--rm`) y `bank-api-db` sigue `Up`.
+- `podman inspect bank-api:spec09 --format '{{.Config.User}} | EXPOSE={{.Config.ExposedPorts}} | ENTRYPOINT={{.Config.Entrypoint}}'` → `bankapi | EXPOSE=map[8080/tcp:{}] | ENTRYPOINT=[java -jar /app/bankaccount.jar]`.
+- `./gradlew test jacocoTestCoverageVerification --console=plain`:
+  ```
+  > Task :test
+  > Task :jacocoTestCoverageVerification
+
+  BUILD SUCCESSFUL in 13s
+  7 actionable tasks: 3 executed, 4 up-to-date
+  ```
+  Resumen XML: **55 tests, skipped=0, failures=0, errors=0 en 12 clases**; cobertura JaCoCo sin cambios: **90.24% líneas (305/338)**.
+
+**Incidencias y desviaciones:**
+1. **`./gradlew nativeImage` no ejecutado:** GraalVM no está instalada (solo Temurin 21). Se entrega el fat JAR sobre JRE, no un binario nativo. El comando queda documentado como opcional en `AGENTS.md`, `NOTES.md` y `MEMORY.md`.
+2. **Red del smoke test:** la app dentro del contenedor lee el datasource de `127.0.0.1:5432`, que es el `bank-api-db` del host. Se usó `--network host` (la opción que permite el smoke test sin tocar ese contenedor); en una instalación real haría falta una red compartida o ajustar `BANK_DB_HOST`. La IP del host en el contenedor es la misma, por eso `/health` —que comprueba JDBC— devuelve UP.
+3. **Imagen base no alpine:** `eclipse-temurin:21-jre` (Ubuntu) pesa ~400 MB con el JAR. Se eligió por ser la contrapartida oficial del JDK 21 de la etapa de build; no se optimizó a una imagen JRE mínima (fuera de alcance).
+4. **El build dentro del contenedor descarga Gradle 8.14.3 y las dependencias** la primera vez (~2 min); las capas de configuración se copian antes que `src` para aprovechar la caché de Podman en reconstrucciones. Los warnings conocidos (SLF4J sin providers, `HttpAttributes.PRINCIPAL` deprecado) aparecen también en el build de la imagen y no bloquean.
+5. **`SERVER_PORT` es una variable nueva** añadida a `application.properties`; no cambia el puerto por defecto (8080) ni los tests. El contenedor de prueba se arrancó con `-e SERVER_PORT=8080` explícitamente solo para demostrar el mecanismo.
+6. No se borró ni se sobrescribió nada existente (solo se crearon `Dockerfile` y `.dockerignore`, y se añadió una línea a `application.properties`). No se tocaron lógica de negocio, migraciones, specs ajenas ni contenedores/volúmenes ajenos; `bank-api-db` sigue activo. **No se hizo commit** (regla SDD): sugerencia `build(docker): imagen multi-stage y smoke test de /health (spec-09)`.

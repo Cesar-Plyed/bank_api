@@ -1,0 +1,20 @@
+# spec-09: mantener el contexto de build pequeno y no copiar artefactos locales.
+.git
+.gitignore
+.gradle
+build/
+target/
+out/
+.micronaut/
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.log
+specs/
+README.md
+NOTES.md
+MEMORY.md
+AGENTS.md
+*.md
