@@ -4,14 +4,15 @@
 - `README.md` documenta JWT, PostgreSQL, transacciones y tests completos; el repo es un skeleton. Verifica `src/` antes de asumir que un endpoint existe.
 - Entrada: `io.onstructive.micronaut.Application`; paquete base `io.onstructive.micronaut`.
 - Stack verificado: Java 21 (`build.gradle.kts`), Micronaut 4.10.12 (`gradle.properties`), plugin Gradle 4.6.2, wrapper Gradle 8.14.3.
-- Único controller: `AccountController` en `/accounts` (**sin** prefijo `/api`): list, create, deposit, withdraw, delete; IDs `UUID`.
-- Seguridad desactivada: `micronaut.security.enabled=false`. Existe la entidad `User` de dominio (spec-01), pero **no hay autenticación/JWT**; las reglas `intercept-url-map` de Swagger están inactivas.
+- Controllers: `AccountController` en `/accounts` (**sin** prefijo `/api`, legacy): list, create, deposit, withdraw, delete; IDs `UUID`. `AuthController` en `/api/auth` (spec-02): `POST /register`, `POST /login`, ambos `@PermitAll`.
+- Seguridad **activada** (spec-02): `micronaut.security.enabled=true` + `micronaut-security-jwt`, HS256 con `JWT_SECRET` (default solamente de desarrollo en `application.properties`, ≥32 bytes). `/api/auth/**` es público; el resto (incluido `/accounts`) exige autenticación hasta la spec-03. Las reglas `intercept-url-map` de Swagger siguen anonymous. Hash de contraseñas BCrypt 10 rondas (`$2a$`/`$2b$`), nunca texto plano.
 - Persistencia (spec-01): PostgreSQL 15 en Podman rootless en `127.0.0.1:5432` (db `bank_api`, usuario `bank_user`, password `bank_pass`). Los tres repositorios fijan `Dialect.POSTGRES`. **`datasources.default.schema-generate=NONE`**: Flyway es el único dueño del esquema (`V1__CreateTables.sql`, `V2__AddIndexes.sql` en `src/main/resources/db/migration/`).
 - Swagger UI: `/swagger-ui.html` (recursos `classpath:META-INF/swagger`). `src/main/resources/openapi/bankaccount-0.0.yml` es un placeholder obsoleto (solo `/bankaccount`): no es fuente de verdad.
 
 ## Comandos exactos
-- `./gradlew test` — suite actual: `BankaccountTest` (smoke de arranque) + `RepositoryTest` (spec-01, guarda/lee `User` y `Account`).
+- `./gradlew test` — suite actual: `BankaccountTest` (smoke de arranque) + `RepositoryTest` (spec-01, guarda/lee `User` y `Account`) + `AuthControllerTest` (spec-02, 4 tests HTTP de registro/login).
 - `./gradlew test --tests "io.onstructive.micronaut.BankaccountTest"` — test puntual.
+- `./gradlew test --tests "*Auth*Test"` — solo los tests de autenticación (spec-02).
 - `./gradlew run` / `./gradlew build` / `./gradlew classes`.
 - Requiere JDK 21 y `JAVA_HOME`: esta máquina no tiene `java` en PATH, así que el wrapper falla hasta exportarlo. JDK instalado (spec-00): `/home/void/AI/apps/jdk-21` (Temurin 21.0.13.1+2) → `export JAVA_HOME=/home/void/AI/apps/jdk-21; export PATH="$JAVA_HOME/bin:$PATH"`. No hay PostgreSQL en el host; sí hay Podman 6.1.4 para contenedores locales.
 - Base de datos (spec-01), **Podman, no Docker**. Arrancar:
@@ -20,6 +21,7 @@
 - Parar: `podman stop bank-api-db`. Arrancar de nuevo: `podman start bank-api-db`. Estado: `podman ps`. **No borrar el contenedor ni su volumen sin permiso explícito.**
 - Verificar esquema: `podman exec bank-api-db psql -U bank_user -d bank_api -c '\dt'` (y `-c '\di'` para índices). Las apps/tests necesitan el contenedor activo; `./gradlew test` falla si la BD no está arriba.
 - Datasource por entorno (defaults incluidos): `BANK_DB_HOST=127.0.0.1`, `BANK_DB_PORT=5432`, `BANK_DB_NAME=bank_api`, `BANK_DB_USER=bank_user`, `BANK_DB_PASSWORD=bank_pass`. El esquema **no** lo genera Micronaut: `datasources.default.schema-generate=NONE` y Flyway aplica V1/V2 en el primer arranque.
+- JWT (spec-02): `JWT_SECRET=${JWT_SECRET:dev-only-secret-change-me-please-32bytes}`; **en producción hay que definir `JWT_SECRET`** con al menos 32 bytes (256 bits) para HS256. El default existe solo para desarrollo/tests. Expiración 3600 s.
 
 ## Convenciones del repo
 - Configuración real en `application.properties` (no YAML, pese al README), `logback.xml` y `openapi.properties`.

@@ -67,3 +67,31 @@ Seguimiento de avance, cambios e incidencias. Fecha de hoy: **2026-11-25**.
 6. El contenedor `bank-api-db` queda **activo** a propósito: los tests lo necesitan. No se hizo commit (regla SDD).
 
 **No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(persistence): modelo de dominio y Flyway sobre PostgreSQL (spec-01)`.
+
+## 2026-11-25 — spec-02: Autenticación JWT
+
+**Acciones realizadas:**
+- `build.gradle.kts`: añadidas `io.micronaut.security:micronaut-security-jwt` (resuelta 4.15.2, alineada con Micronaut 4.10.12) y `org.mindrot:jbcrypt:0.4`.
+- `application.properties`: `micronaut.security.enabled=true`, secreto HS256 `micronaut.security.token.jwt.signatures.secret.generator.secret=${JWT_SECRET:dev-only-secret-change-me-please-32bytes}` (default **solo dev**, ≥32 bytes) y `micronaut.security.token.jwt.generator.access.expiration=3600`. Las reglas `intercept-url-map` de Swagger permanecen anonymous.
+- DTOs `@Serdeable` con validación: `RegisterRequest`, `LoginRequest`, `LoginResponse`, `UserResponse` (este último nunca expone `passwordHash`).
+- `security/PasswordEncoder.java`: BCrypt con 10 rondas (`BCrypt.gensalt(10)`); `matches` devuelve `false` para hashes corruptos en lugar de lanzar 500.
+- `security/UserAuthenticationProvider.java`: implementa `AuthenticationProvider<HttpRequest<?>, String, String>`; valida contra `UserRepository.findByUsername` + BCrypt y devuelve `AuthenticationResponse.success(username, {userId, email})` o `failure()`.
+- `security/JwtTokenService.java`: usa el `JwtTokenGenerator` de Micronaut con expiración explícita de 3600 s; el `sub` del JWT es el username.
+- `controller/AuthController.java` en `/api/auth`: `POST /register` (201, rechaza username/email duplicados con 409) y `POST /login` (200 con `accessToken`, `tokenType=Bearer`, `expiresIn=3600`, `user`; 401 si las credenciales fallan). Ambos con `@PermitAll` y `@ExecuteOn(TaskExecutors.IO)`. No se tocó `AccountController`, `AccountService`, migraciones ni transacciones.
+- `AuthControllerTest.java`: 4 tests HTTP contra la BD real de Podman (registro OK + hash BCrypt, duplicado 4xx, login OK con JWT de 3 segmentos y `sub`=username, login con password incorrecto 401). `@MicronautTest(transactional=false)` para que el cliente HTTP vea los datos confirmados.
+
+**Verificación (salida literal):**
+- `./gradlew test --tests "*Auth*Test" --console=plain` → `BUILD SUCCESSFUL in 3s`, `5 actionable tasks: 2 executed, 3 up-to-date`. XML: `<testsuite name="io.onstructive.micronaut.AuthControllerTest" tests="4" skipped="0" failures="0" errors="0" ...>`.
+- `./gradlew test --console=plain` → `BUILD SUCCESSFUL in 3s`, `5 actionable tasks: 1 executed, 4 up-to-date`. XML: `AuthControllerTest tests="4"`, `BankaccountTest tests="1"`, `RepositoryTest tests="1"`, todos con `failures="0" errors="0"` (6 tests en total).
+
+**Incidencias y desviaciones:**
+1. Micronaut Security 4.15.2 **ya no incluye** la interfaz `io.micronaut.security.authentication.PasswordEncoder` (buscada en todos los jars del classpath, ausente). Se creó un bean propio `security.PasswordEncoder` sobre jBCrypt; no existe el módulo `micronaut-security-bcrypt` en Maven Central para esta versión (404).
+2. `AuthenticationProvider` en Micronaut Security 4 es **síncrono** (`AuthenticationResponse authenticate(T, AuthenticationRequest<I,S>)`), no reactivo como en versiones 3.x. El controlador lo invoca directamente; se inyecta la implementación concreta para evitar ambigüedad de genéricos.
+3. `JwtTokenGenerator.generateToken` en 4.x solo expone las sobrecargas `(Authentication, Integer)` y `(Map<String,Object>)`; se pasa 3600 explícitamente en vez de depender solo de la propiedad de configuración.
+4. `@MicronautTest` tiene `transactional=true` por defecto: con peticiones HTTP el registro quedaría sin confirmar y el login no lo vería. Se fijó `transactional=false` en `AuthControllerTest`; las filas de prueba usan suffixes UUID y quedan en la BD (convención ya aceptada en spec-01).
+5. `GlobalExceptionHandler` preexistente (skeleton, spec-05) no se modificó: el controlador devuelve `HttpResponse` con estados explícitos (201/409/401/200) para no depender del manejo global de errores.
+6. El primer intento de compilación del test falló porque `HttpClient.exchange` es reactivo (`Publisher<HttpResponse<O>>`); se corrigió usando `client.toBlocking().exchange(...)`. Sin impacto funcional.
+7. Con seguridad activa, los endpoints legacy `/accounts` ahora exigen autenticación (no se migraron a `/api/accounts` ni se les dio ownership: eso es spec-03). Ningún test existente los invoca.
+8. Contenedor `bank-api-db` dejado activo; no se borró nada. No se hizo commit (regla SDD).
+
+**No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(auth): registro y login JWT (spec-02)`.

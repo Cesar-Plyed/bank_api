@@ -24,6 +24,9 @@ dependencies {
     // Flyway 10 externalizó el soporte de PostgreSQL a este módulo.
     runtimeOnly("org.flywaydb:flyway-database-postgresql:10.22.0")
     implementation("io.micronaut.security:micronaut-security")
+    // spec-02: JWT firmado + BCrypt para el hash de contraseñas.
+    implementation("io.micronaut.security:micronaut-security-jwt")
+    implementation("org.mindrot:jbcrypt:0.4")
     implementation("io.micronaut.serde:micronaut-serde-jackson")
     implementation("io.micronaut.sql:micronaut-jdbc-hikari")
     compileOnly("io.micronaut:micronaut-http-client")

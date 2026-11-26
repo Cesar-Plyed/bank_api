@@ -4,11 +4,11 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 
 ## Estado actual
 - Repo skeleton Micronaut 4.10.12 / Java 21 / Gradle wrapper 8.14.3. `rootProject.name="bankaccount"` (carpeta `bank_api`). Entrada `io.onstructive.micronaut.Application`.
-- Único controller: `AccountController` en `/accounts` (sin `/api`): list, create, deposit, withdraw, delete; IDs `UUID`.
-- Seguridad desactivada: no hay `User` ni JWT todavía; las reglas `intercept-url-map` de Swagger están inactivas.
+- Controllers: `AccountController` en `/accounts` (legacy, sin `/api`) y `AuthController` en `/api/auth` (spec-02: `POST /register`, `POST /login`, `@PermitAll`).
+- Seguridad **activada** (spec-02): `micronaut.security.enabled=true`, JWT HS256 con `JWT_SECRET` (default dev ≥32 bytes, **definir siempre en producción**), expiración 3600 s. `/api/auth/**` público; `/accounts` autenticado hasta spec-03. Swagger sigue anonymous. Contraseñas BCrypt 10 rondas.
 - Persistencia (spec-01): PostgreSQL 15 en Podman rootless (`127.0.0.1:5432`, db `bank_api`, usuario `bank_user`, password `bank_pass`). Tres repositorios con `Dialect.POSTGRES`. **`datasources.default.schema-generate=NONE`**: Flyway es dueño del esquema con `V1__CreateTables.sql` y `V2__AddIndexes.sql`.
 - Configuración real: `application.properties`, `logback.xml`, `openapi.properties`. `src/main/resources/openapi/bankaccount-0.0.yml` es placeholder obsoleto; no es fuente de verdad.
-- Tests: `BankaccountTest` (smoke `@MicronautTest`) + `RepositoryTest` (spec-01). `./gradlew test` pasa con la BD de Podman activa (2026-11-25).
+- Tests: `BankaccountTest` (smoke `@MicronautTest`) + `RepositoryTest` (spec-01) + `AuthControllerTest` (spec-02, 4 tests HTTP). `./gradlew test` pasa con la BD de Podman activa (2026-11-25): 6 tests, 0 failures/errors.
 - `README.md` describe el objetivo, no el código implementado. El estado real prevalece: verifica `src/` antes de asumir endpoints.
 
 ## Entorno (spec-00)
@@ -38,3 +38,15 @@ Decisiones, contexto y lecciones para el agente que retome el trabajo. Actualiza
 - Lección: Flyway 10.22.0 necesita `org.flywaydb:flyway-database-postgresql:10.22.0` para PostgreSQL 15, si no falla con `Unsupported Database: PostgreSQL 15.20`.
 - Sin FK entre tablas (fuera de alcance de la spec); H2 se conserva en el build pero ya no se usa.
 - Sin commit: queda pendiente la aprobación del orquestador (`feat(persistence): modelo de dominio y Flyway sobre PostgreSQL (spec-01)`).
+
+## Spec-02 — autenticación JWT (2026-11-25)
+- Dependencias: `io.micronaut.security:micronaut-security-jwt` (4.15.2) y `org.mindrot:jbcrypt:0.4`. No existe `micronaut-security-bcrypt` en Maven Central para Micronaut Security 4.
+- `JWT_SECRET` se lee desde `application.properties` con default de desarrollo: `micronaut.security.token.jwt.signatures.secret.generator.secret=${JWT_SECRET:dev-only-secret-change-me-please-32bytes}`. HS256 exige ≥32 bytes; en producción se debe exportar `JWT_SECRET`. Expiración configurada en 3600 s (`micronaut.security.token.jwt.generator.access.expiration`), además se pasa 3600 al generador.
+- Micronaut Security 4 eliminó `io.micronaut.security.authentication.PasswordEncoder`: se define un bean propio con `BCrypt.gensalt(10)` / `BCrypt.checkpw`. Prefijo de hash `$2a$`/`$2b$`.
+- `AuthenticationProvider` en 4.x es **síncrono**: `AuthenticationResponse authenticate(HttpRequest<?>, AuthenticationRequest<String,String>)`. Se inyecta la implementación concreta (`UserAuthenticationProvider`) porque los genéricos dificultan la inyección por interfaz.
+- `JwtTokenGenerator.generateToken(Authentication, Integer)` (4.x) genera `sub` = `authentication.getName()` = username, `iat`, `exp` = ahora + 3600 s y lo firma con el secreto configurado.
+- `@PermitAll` (JSR-250, `jakarta.annotation.security.PermitAll`) funciona con `micronaut-security-annotations` para hacer públicos ambos endpoints. Sin token, las peticiones a `/api/auth/**` pasan; el resto está autenticado por defecto.
+- Lección: `@MicronautTest` es `transactional=true` por defecto; con `HttpClient` hay que usar `@MicronautTest(transactional=false)` o el registro no se ve desde el login (distinta conexión JDBC).
+- Lección: `HttpClient.exchange` es reactivo; en tests usar `client.toBlocking().exchange(...)`.
+- `GlobalExceptionHandler` del skeleton permanece intacto (spec-05): el `AuthController` devuelve `HttpResponse` con estados explícitos (201/409/200/401) en lugar de lanzar excepciones.
+- Sin commit: queda pendiente `feat(auth): registro y login JWT (spec-02)`.
