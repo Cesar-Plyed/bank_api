@@ -19,6 +19,8 @@ dependencies {
     annotationProcessor("io.micronaut.openapi:micronaut-openapi")
     annotationProcessor("io.micronaut.security:micronaut-security-annotations")
     annotationProcessor("io.micronaut.serde:micronaut-serde-processor")
+    // spec-05: sin el processor los @Valid son no-op; sin el runtime no hay ConstraintViolationException.
+    annotationProcessor("io.micronaut.validation:micronaut-validation-processor")
     implementation("io.micronaut.data:micronaut-data-jdbc")
     implementation("io.micronaut.flyway:micronaut-flyway")
     // Flyway 10 externalizó el soporte de PostgreSQL a este módulo.
@@ -28,6 +30,7 @@ dependencies {
     implementation("io.micronaut.security:micronaut-security-jwt")
     implementation("org.mindrot:jbcrypt:0.4")
     implementation("io.micronaut.serde:micronaut-serde-jackson")
+    implementation("io.micronaut.validation:micronaut-validation")
     implementation("io.micronaut.sql:micronaut-jdbc-hikari")
     compileOnly("io.micronaut:micronaut-http-client")
     compileOnly("io.micronaut.openapi:micronaut-openapi-annotations")

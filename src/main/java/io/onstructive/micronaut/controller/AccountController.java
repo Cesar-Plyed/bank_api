@@ -75,11 +75,7 @@ public class AccountController {
         if (ownerId == null) {
             return HttpResponse.unauthorized();
         }
-        try {
-            return HttpResponse.ok(service.findByIdForOwner(id, ownerId));
-        } catch (IllegalArgumentException e) {
-            return HttpResponse.notFound();
-        }
+        return HttpResponse.ok(service.findByIdForOwner(id, ownerId));
     }
 
     @Delete("/{id}")
@@ -90,13 +86,7 @@ public class AccountController {
         if (ownerId == null) {
             return HttpResponse.unauthorized();
         }
-        try {
-            service.delete(id, ownerId);
-            return HttpResponse.noContent();
-        } catch (IllegalArgumentException e) {
-            return HttpResponse.notFound();
-        } catch (IllegalStateException e) {
-            return HttpResponse.badRequest();
-        }
+        service.delete(id, ownerId);
+        return HttpResponse.noContent();
     }
 }

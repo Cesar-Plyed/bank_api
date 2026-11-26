@@ -1,6 +1,9 @@
 package io.onstructive.micronaut.service;
 
 import io.micronaut.transaction.annotation.Transactional;
+import io.onstructive.micronaut.exception.AccountNotFoundException;
+import io.onstructive.micronaut.exception.BusinessRuleException;
+import io.onstructive.micronaut.exception.InsufficientFundsException;
 import io.onstructive.micronaut.model.Account;
 import io.onstructive.micronaut.model.Transaction;
 import io.onstructive.micronaut.model.TransactionStatus;
@@ -21,8 +24,8 @@ import java.util.UUID;
  * {@link Transaction} ocurren en la misma transacción. Cualquier excepción de
  * dominio provoca rollback, por lo que no quedan balances a medias ni filas
  * huérfanas. La propiedad se comprueba siempre contra el {@code userId} del JWT;
- * una cuenta ajena o inexistente se trata igual ({@link IllegalArgumentException},
- * que el controller traduce a 404).
+ * una cuenta ajena o inexistente se trata igual
+ * ({@link AccountNotFoundException}, que el manejador global traduce a 404).
  */
 @Singleton
 public class TransactionService {
@@ -35,11 +38,11 @@ public class TransactionService {
         this.transactions = transactions;
     }
 
-    /** Cuenta existente y perteneciente al dueño autenticado; si no, 404 desde el controller. */
+    /** Cuenta existente y perteneciente al dueño autenticado; si no, 404. */
     private Account owned(UUID id, UUID ownerId) {
         return accounts.findById(id)
                 .filter(account -> account.ownerId().equals(ownerId))
-                .orElseThrow(() -> new IllegalArgumentException("Account not found: " + id));
+                .orElseThrow(() -> new AccountNotFoundException(id));
     }
 
     /** Copia de la cuenta con un balance distinto, conservando el resto de los campos. */
@@ -68,7 +71,7 @@ public class TransactionService {
     public Transaction withdraw(UUID accountId, BigDecimal amount, UUID ownerId, String description) {
         Account account = owned(accountId, ownerId);
         if (account.balance().compareTo(amount) < 0) {
-            throw new IllegalStateException("Insufficient funds");
+            throw new InsufficientFundsException();
         }
         accounts.update(withBalance(account, account.balance().subtract(amount)));
         return saveTransaction(accountId, null, amount, TransactionType.WITHDRAWAL, description);
@@ -78,12 +81,12 @@ public class TransactionService {
     public Transaction transfer(UUID fromAccountId, UUID toAccountId, BigDecimal amount,
                                 UUID ownerId, String description) {
         if (fromAccountId.equals(toAccountId)) {
-            throw new IllegalStateException("Cannot transfer to the same account");
+            throw new BusinessRuleException("Cannot transfer to the same account");
         }
         Account source = owned(fromAccountId, ownerId);
         Account target = owned(toAccountId, ownerId);
         if (source.balance().compareTo(amount) < 0) {
-            throw new IllegalStateException("Insufficient funds");
+            throw new InsufficientFundsException();
         }
         accounts.update(withBalance(source, source.balance().subtract(amount)));
         accounts.update(withBalance(target, target.balance().add(amount)));

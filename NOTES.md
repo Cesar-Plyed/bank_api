@@ -199,3 +199,75 @@ Seguimiento de avance, cambios e incidencias. Fecha de hoy: **2026-11-25**.
 7. Las filas de prueba quedan en la BD (convención ya aceptada). Contenedor `bank-api-db` dejado activo; no se borró nada. Warning SLF4J sin providers sigue apareciendo, no bloqueante.
 
 **No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(transactions): depósitos, retiros y transferencias ACID (spec-04)`.
+
+## 2026-11-25 — spec-05: Manejo consistente de errores y validación
+
+**Acciones realizadas:**
+- Nuevas excepciones de dominio en `exception/`: `BankException` (base abstracta con `HttpStatus`), `AccountNotFoundException` (404), `InsufficientFundsException` (400), `DuplicateResourceException` (409) y `BusinessRuleException` (400). `ErrorPayload` centraliza el cuerpo de respuesta y los códigos estables.
+- `GlobalExceptionHandler` reescrito: dominio → su status; `ConstraintViolationException` → 400 con `fieldErrors`; cualquier otra excepción → 500 con mensaje genérico y **sin stack trace** en la respuesta (el detalle solo se registra en el log del servidor). `ValidationExceptionHandler` sustituye (`@Replaces`) al handler de validación de Micronaut, `io.micronaut.validation.exceptions.ConstraintExceptionHandler`, para que también las violaciones de `@Valid` usen el payload único.
+- `AccountService` y `TransactionService` lanzan excepciones de dominio en lugar de `IllegalArgumentException`/`IllegalStateException`. `AccountController` y `TransactionController` ya no tienen `try/catch` que traduzcan a 4xx; se conservan las comprobaciones `ownerId == null → 401` y `@Secured`/`@PermitAll` intactos.
+- `ErrorHandlingTest.java` (nuevo, 6 tests con JWT real): 404 con `NOT_FOUND`, 400 fondos insuficientes con `INSUFFICIENT_FUNDS`, 409 duplicado con `CONFLICT`, body inválido con `VALIDATION_ERROR` + `fieldErrors` (`accountId`, `amount`), regla de negocio con `BUSINESS_RULE_VIOLATION` y 500 del handler directo sin mensaje interno ni stack trace.
+
+**Payload único de error (todas las ramas del handler):**
+```json
+{
+  "error": "<codigo>",
+  "message": "<texto legible>",
+  "path": "<request.getPath()>",
+  "timestamp": "<Instant en ISO-8601>",
+  "fieldErrors": { "<campo>": "<mensaje>" }
+}
+```
+`fieldErrors` es **opcional**: solo aparece en errores de validación (400). El status HTTP viaja en la respuesta, no en el cuerpo.
+
+**Tabla de códigos:**
+| Situación | HTTP | `error` | `fieldErrors` |
+| --- | --- | --- | --- |
+| Cuenta inexistente o ajena | 404 | `NOT_FOUND` | no |
+| Fondos insuficientes | 400 | `INSUFFICIENT_FUNDS` | no |
+| Regla de negocio (borrar con saldo, transferir a la misma cuenta) | 400 | `BUSINESS_RULE_VIOLATION` | no |
+| Body inválido (`@Valid`) | 400 | `VALIDATION_ERROR` | **sí** |
+| Recurso duplicado (número de cuenta) | 409 | `CONFLICT` | no |
+| Autenticación (sin token / credenciales inválidas) | 401 | gestionado por Micronaut Security | no |
+| Error inesperado | 500 | `INTERNAL_ERROR` (mensaje genérico, sin stack trace) | no |
+
+**Verificación (salida literal):**
+- `./gradlew test --tests "*Error*Test" --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+  > Task :compileTestJava
+  > Task :inspectRuntimeClasspath
+  > Task :processTestResources NO-SOURCE
+  > Task :testClasses
+  > Task :test
+
+  BUILD SUCCESSFUL in 4s
+  5 actionable tasks: 3 executed, 2 up-to-date
+  ```
+- `./gradlew test --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+  > Task :compileTestJava UP-TO-DATE
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources NO-SOURCE
+  > Task :testClasses UP-TO-DATE
+  > Task :test
+
+  BUILD SUCCESSFUL in 7s
+  5 actionable tasks: 1 executed, 4 up-to-date
+  ```
+- XML de resultados: `AccountControllerTest: tests=6 skipped=0 failures=0 errors=0`; `AuthControllerTest: tests=4 skipped=0 failures=0 errors=0`; `BankaccountTest: tests=1 skipped=0 failures=0 errors=0`; `ErrorHandlingTest: tests=6 skipped=0 failures=0 errors=0`; `RepositoryTest: tests=1 skipped=0 failures=0 errors=0`; `TransactionControllerTest: tests=7 skipped=0 failures=0 errors=0` (**25 tests, 0 failures/errors**; los 19 preexistentes siguen pasando).
+
+**Incidencias y desviaciones:**
+1. **Dependencias nuevas necesarias:** el classpath no tenía `micronaut-validation` ni `micronaut-validation-processor`, por lo que `@Valid` era un *no-op* y no existía `ConstraintViolationException` que mapear. Se añadieron ambas a `build.gradle.kts` (versiones gestionadas por el BOM de Micronaut 4.10.12 → 4.12.0). Sin esto el criterio de validación con `fieldErrors` era imposible. No es un cambio de auth ni de migraciones.
+2. **Handler de validación de Micronaut:** la clase integrada se llama `io.micronaut.validation.exceptions.ConstraintExceptionHandler` (no `ConstraintViolationExceptionHandler`) y no es `@Secondary`; se sustituye con `@Replaces(ConstraintExceptionHandler.class)` en `ValidationExceptionHandler` para garantizar que el payload único gane. Verificado por el test de `fieldErrors`.
+3. **`/api/auth/**` unificado (incidencia resuelta durante la corrección autorizada):** inicialmente los bodies `{"error": "..."}` de registro duplicado y credenciales inválidas quedaron fuera del payload único por la prohibición de modificar auth. Con la autorización explícita del usuario, `AuthController` usa `ErrorPayload` en ambos: `CONFLICT` en 409 y `AUTHENTICATION_FAILED` en 401, con `message`, `path` y `timestamp`. Statuses, seguridad y DTOs intactos; verificado por 2 tests nuevos en `ErrorHandlingTest`. Criterio 1: **OK**.
+4. **Código `error` vs. clase Java:** se eligieron códigos estables en mayúsculas (`NOT_FOUND`, `CONFLICT`, …) en lugar del `getClass().getSimpleName()` del skeleton, para que la tabla de códigos sea estable aunque se renombren clases. Documentado arriba.
+5. El log del servidor sigue registrando el stack trace de errores 500 (`log.error(..., exception)`); la spec exige **no exponerlo** en la respuesta HTTP, que es lo que se cumple y se verifica por test.
+6. Las filas de prueba quedan en la BD (convención ya aceptada). Contenedor `bank-api-db` dejado activo; no se borró nada. Warning SLF4J sin providers sigue apareciendo, no bloqueante.
+
+**No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(errors): payload único y excepciones de dominio (spec-05)`.

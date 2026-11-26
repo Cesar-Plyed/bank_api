@@ -65,12 +65,8 @@ public class TransactionController {
         if (ownerId == null) {
             return HttpResponse.unauthorized();
         }
-        try {
-            return HttpResponse.created(TransactionResponse.from(service.deposit(
-                    request.accountId(), request.amount(), ownerId, request.description())));
-        } catch (IllegalArgumentException e) {
-            return HttpResponse.notFound();
-        }
+        return HttpResponse.created(TransactionResponse.from(service.deposit(
+                request.accountId(), request.amount(), ownerId, request.description())));
     }
 
     @Post("/transactions/withdraw")
@@ -81,14 +77,8 @@ public class TransactionController {
         if (ownerId == null) {
             return HttpResponse.unauthorized();
         }
-        try {
-            return HttpResponse.created(TransactionResponse.from(service.withdraw(
-                    request.accountId(), request.amount(), ownerId, request.description())));
-        } catch (IllegalArgumentException e) {
-            return HttpResponse.notFound();
-        } catch (IllegalStateException e) {
-            return HttpResponse.badRequest();
-        }
+        return HttpResponse.created(TransactionResponse.from(service.withdraw(
+                request.accountId(), request.amount(), ownerId, request.description())));
     }
 
     @Post("/transactions/transfer")
@@ -99,15 +89,9 @@ public class TransactionController {
         if (ownerId == null) {
             return HttpResponse.unauthorized();
         }
-        try {
-            return HttpResponse.created(TransactionResponse.from(service.transfer(
-                    request.fromAccountId(), request.toAccountId(), request.amount(),
-                    ownerId, request.description())));
-        } catch (IllegalArgumentException e) {
-            return HttpResponse.notFound();
-        } catch (IllegalStateException e) {
-            return HttpResponse.badRequest();
-        }
+        return HttpResponse.created(TransactionResponse.from(service.transfer(
+                request.fromAccountId(), request.toAccountId(), request.amount(),
+                ownerId, request.description())));
     }
 
     @Get("/accounts/{accountId}/transactions")
@@ -118,12 +102,8 @@ public class TransactionController {
         if (ownerId == null) {
             return HttpResponse.unauthorized();
         }
-        try {
-            return HttpResponse.ok(service.history(accountId, ownerId).stream()
-                                           .map(TransactionResponse::from)
-                                           .toList());
-        } catch (IllegalArgumentException e) {
-            return HttpResponse.notFound();
-        }
+        return HttpResponse.ok(service.history(accountId, ownerId).stream()
+                                       .map(TransactionResponse::from)
+                                       .toList());
     }
 }

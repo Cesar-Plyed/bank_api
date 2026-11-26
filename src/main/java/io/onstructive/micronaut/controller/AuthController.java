@@ -15,6 +15,7 @@ import io.onstructive.micronaut.dto.LoginRequest;
 import io.onstructive.micronaut.dto.LoginResponse;
 import io.onstructive.micronaut.dto.RegisterRequest;
 import io.onstructive.micronaut.dto.UserResponse;
+import io.onstructive.micronaut.exception.ErrorPayload;
 import io.onstructive.micronaut.model.User;
 import io.onstructive.micronaut.repository.UserRepository;
 import io.onstructive.micronaut.security.JwtTokenService;
@@ -23,13 +24,15 @@ import io.onstructive.micronaut.security.UserAuthenticationProvider;
 import jakarta.annotation.security.PermitAll;
 import jakarta.validation.Valid;
 import java.time.Instant;
-import java.util.Map;
 import java.util.UUID;
 
 /** Registro y login JWT: ambos endpoints públicos (spec-02). */
 @Controller("/api/auth")
 @ExecuteOn(TaskExecutors.IO)
 public class AuthController {
+
+    /** Código estable del payload único para credenciales inválidas (spec-05). */
+    private static final String AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED";
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
@@ -52,7 +55,8 @@ public class AuthController {
         if (userRepository.existsByUsername(request.username())
                 || userRepository.existsByEmail(request.email())) {
             return HttpResponse.status(HttpStatus.CONFLICT)
-                    .body(Map.of("error", "username or email already exists"));
+                    .body(ErrorPayload.of(ErrorPayload.CONFLICT,
+                            "username or email already exists", "/api/auth/register"));
         }
 
         User user = new User(
@@ -74,7 +78,8 @@ public class AuthController {
 
         if (!result.isAuthenticated()) {
             return HttpResponse.status(HttpStatus.UNAUTHORIZED)
-                    .body(Map.of("error", "invalid credentials"));
+                    .body(ErrorPayload.of(AUTHENTICATION_FAILED,
+                            "invalid credentials", "/api/auth/login"));
         }
 
         Authentication authentication = result.getAuthentication().orElseThrow();
