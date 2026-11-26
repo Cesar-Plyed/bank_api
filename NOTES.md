@@ -591,3 +591,56 @@ podman stop bank-api-smoke09             # --rm lo elimina automáticamente
 4. **El build dentro del contenedor descarga Gradle 8.14.3 y las dependencias** la primera vez (~2 min); las capas de configuración se copian antes que `src` para aprovechar la caché de Podman en reconstrucciones. Los warnings conocidos (SLF4J sin providers, `HttpAttributes.PRINCIPAL` deprecado) aparecen también en el build de la imagen y no bloquean.
 5. **`SERVER_PORT` es una variable nueva** añadida a `application.properties`; no cambia el puerto por defecto (8080) ni los tests. El contenedor de prueba se arrancó con `-e SERVER_PORT=8080` explícitamente solo para demostrar el mecanismo.
 6. No se borró ni se sobrescribió nada existente (solo se crearon `Dockerfile` y `.dockerignore`, y se añadió una línea a `application.properties`). No se tocaron lógica de negocio, migraciones, specs ajenas ni contenedores/volúmenes ajenos; `bank-api-db` sigue activo. **No se hizo commit** (regla SDD): sugerencia `build(docker): imagen multi-stage y smoke test de /health (spec-09)`.
+
+## 2026-11-25 — spec-10: Cierre documental
+
+**Acciones realizadas:**
+- `README.md` reescrito por completo para describir el estado real del código/config (fuente de verdad), no el estado aspiracional anterior. Se corrigieron: Spring Security → **Micronaut Security**; Docker → **Podman** (`Dockerfile` real, construido con Podman); `application.yml` → **`application.properties`**; ruta legacy `/accounts` → `/api/accounts`; IDs `Long`/`1` → `UUID`; `DB_*` → `BANK_DB_*`; declaraciones falsas eliminadas (backups automáticos, versionado de API, AOT compilado, SSL/TLS, CSRF, AES-256, hash AES, `jpa.hibernate`, licencia MIT). DTOs y payloads de ejemplo ajustados a los records reales (`UserResponse` sin `createdAt`, `LoginResponse` con `expiresIn`, `Account` con `ownerId`/`status`/`createdAt`, `TransactionResponse` con UUIDs).
+- Sección **Performance** sin métricas no medidas: se eliminaron `< 1s`, `~250MB`, `5000+ req/s`, `p95 < 50ms`, `~50ms` nativo; se conservan solo el tamaño medido del JAR (~25 MB) y `nativeImage` marcado como opcional/no ejecutado.
+- Roadmap: `[x]` en **Tests completos** (JUnit 5 + Micronaut HttpClient + JaCoCo; 55 tests, 90.24% líneas); el resto de ítems fuera de alcance siguen sin marcar. Se documenta que Testcontainers y REST Assured **no se usaron**.
+- **LICENSE:** no existe; se documenta como pendiente en lugar de afirmar MIT.
+- `MEMORY.md`: línea "README describe el objetivo" actualizada y añadida sección de cierre con specs, commits y desviaciones finales.
+
+**Cierre — specs 00-10 y commits pendientes de aprobación (SDD: ninguno ejecutado):**
+
+| Spec | Commit sugerido (Conventional Commits) |
+| --- | --- |
+| 00 | `chore(build): bootstrap de entorno y andamiaje SDD (spec-00)` |
+| 01 | `feat(persistence): modelo de dominio y Flyway sobre PostgreSQL (spec-01)` |
+| 02 | `feat(auth): registro y login JWT (spec-02)` |
+| 03 | `feat(accounts): CRUD bajo /api/accounts con dueño desde JWT (spec-03)` |
+| 04 | `feat(transactions): depósitos, retiros y transferencias ACID (spec-04)` |
+| 05 | `feat(errors): payload único y excepciones de dominio (spec-05)` |
+| 06 | `feat(observability): Swagger, health y logs JSON (spec-06)` |
+| 07 | `feat(ratelimit): filtro de rate limiting con 429 unificado (spec-07)` |
+| 08 | `test(coverage): suite de servicio/E2E y JaCoCo al 70% (spec-08)` |
+| 09 | `build(docker): imagen multi-stage y smoke test de /health (spec-09)` |
+| 10 | `docs(readme): cierre documental del estado real (spec-10)` |
+
+**Verificación (salida literal):**
+- `grep -rn 'Spring Security\|Docker\|application.yml\|/accountslegacy' README.md` → 8 líneas, todas trazables y verdaderas:
+  ```
+  47:- Autenticación JWT firmada con HS256 (**Micronaut Security**, no Spring Security).
+  92:- Dockerfile multi-stage construido con Podman
+  116:# Podman 6.1.4 (no Docker) para la base de datos
+  221:├── Dockerfile, .dockerignore
+  363:La configuración real vive en `src/main/resources/application.properties` (**no** en `application.yml`). Fragmentos relevantes:
+  414:- **Micronaut Security** (no Spring Security): `micronaut.security.enabled=true` y `micronaut-security-jwt` con firma HS256.
+  535:`Dockerfile` multi-stage: ... `.dockerignore` excluye `.git`, `.gradle`, `build/`, `.idea/`, `specs/` y `*.md`.
+  ```
+  Las menciones a "Spring Security" y "application.yml" son negaciones explícitas; "Docker" aparece solo en `Dockerfile`/`.dockerignore` (reales) y en "no Docker". **Cero** coincidencias de `/accountslegacy` ni de la ruta legacy `/accounts` como endpoint activo.
+- `./gradlew test jacocoTestCoverageVerification --console=plain` → `BUILD SUCCESSFUL in 528ms`, `7 actionable tasks: 7 up-to-date`.
+- `./gradlew test jacocoTestCoverageVerification --rerun-tasks --console=plain` (ejecución fresca) → `BUILD SUCCESSFUL in 15s`, `7 actionable tasks: 7 executed`; warnings conocidos no bloqueantes (SLF4J sin providers, `HttpAttributes.PRINCIPAL` deprecado, `unchecked` en `HealthControllerTest`).
+- XML de resultados: 12 clases, **55 tests, skipped=0, failures=0, errors=0**. JaCoCo sin cambios: `LINE covered=305 missed=33 total=338` (90.24%), `INSTRUCTION 1512/1613`, `BRANCH 84/112`.
+- `git status --short` → ` M README.md` y `?? specs/10-spec/`. **No hay cambios en `src/` ni en `build.gradle.kts`** (criterio 5).
+
+**Incidencias y desviaciones finales (consolidadas, ninguna bloqueante):**
+1. **Testcontainers no usado:** la suite comparte el contenedor Podman `bank-api-db` (`127.0.0.1:5432`).
+2. **REST Assured no usado:** se usa `Micronaut HttpClient` con `toBlocking().exchange(...)` y `Argument.listOf(...)`.
+3. **Rate limiting en memoria**, por instancia: se reinicia al arrancar y no se comparte entre réplicas (sin Redis). `HttpAttributes.PRINCIPAL` está deprecado (`warning: [removal]`) pero funciona.
+4. **`./gradlew nativeImage` no ejecutado:** GraalVM no instalada; se distribuye fat JAR sobre JRE. Imagen `~400 MB` no alpine; smoke test con `--network host`.
+5. **Cobertura por bundle:** `Application.main` y el DTO `AmountRequest` quedan al 0% de líneas; el bundle global está al 90.24% sin bajar el umbral de 70%.
+6. H2 se conserva en `build.gradle.kts` pero ya no se usa; `src/main/resources/openapi/bankaccount-0.0.yml` es placeholder obsoleto.
+7. **`LICENSE` no existe:** pendiente; el README ya no afirma MIT.
+8. Warnings no bloqueantes: SLF4J sin providers y `unchecked` en `HealthControllerTest`. Filas de prueba quedan en la BD; `bank-api-db` sigue activo; no se borró nada.
+9. No se hicieron commits, push, reset ni borrados (regla SDD). Sugerencia de commit para esta spec: `docs(readme): cierre documental del estado real (spec-10)`.

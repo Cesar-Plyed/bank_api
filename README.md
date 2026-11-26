@@ -3,12 +3,13 @@
 ![Java](https://img.shields.io/badge/Java-21-ED8936?logo=java&logoColor=white)
 ![Micronaut](https://img.shields.io/badge/Micronaut-4.10.12-FF6B00?logo=micronaut&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?logo=postgresql&logoColor=white)
-![Gradle](https://img.shields.io/badge/Gradle-8.0-02303A?logo=gradle&logoColor=white)
+![Gradle](https://img.shields.io/badge/Gradle-8.14.3-02303A?logo=gradle&logoColor=white)
 ![Swagger](https://img.shields.io/badge/Swagger-UI-85EA2D?logo=swagger&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
-![License](https://img.shields.io/badge/License-MIT-blue)
 
-API REST profesional para simulación bancaria construida con Micronaut. Demuestra patrones empresariales, gestión de transacciones y autenticación JWT en un framework de alto rendimiento.
+API REST para simulación bancaria construida con Micronaut 4.10.12 y Java 21. Cubre registro/login JWT, CRUD de cuentas por dueño, transacciones atómicas (depósito, retiro, transferencia), historial, manejo uniforme de errores, rate limiting, health checks y logs estructurados.
+
+> **Nota de estado:** este README describe el **código y la configuración reales** del repo. Las cifras citadas (tests, cobertura, tamaño del JAR) son mediciones verificadas; lo que no se midió se indica como tal. El desarrollo sigue Spec Driven Development (SDD): specs en `specs/NN-spec/`, detalle en `NOTES.md` y `MEMORY.md`.
 
 ---
 
@@ -22,50 +23,45 @@ API REST profesional para simulación bancaria construida con Micronaut. Demuest
 - [Configuración](#configuración)
 - [Seguridad](#seguridad)
 - [Transacciones](#transacciones)
+- [Manejo de errores](#manejo-de-errores)
 - [Testing](#testing)
+- [Observabilidad](#observabilidad)
+- [Empaquetado](#empaquetado)
 - [Performance](#performance)
 - [Troubleshooting](#troubleshooting)
 - [Roadmap](#roadmap)
+- [Contribuir](#contribuir)
+- [Licencia](#licencia)
 
 ---
 
 ## Características
 
 ### Gestión Bancaria
-- Crear y gestionar cuentas bancarias
-- Depósitos y retiros con validación
-- Transferencias entre cuentas
-- Historial de transacciones completo
-- Balance en tiempo real
+- Crear, listar, consultar y borrar cuentas, siempre limitadas al dueño autenticado.
+- Depósitos, retiros y transferencias con validación y rollback en caso de error.
+- Historial de movimientos de una cuenta (en ambos sentidos).
+- Balances con `BigDecimal` e identificadores `UUID`.
 
 ### Seguridad
-- Autenticación JWT
-- Encriptación BCrypt para contraseñas
-- Spring Security integrada
-- Validación de entrada en todos los endpoints
-- Rate limiting
+- Autenticación JWT firmada con HS256 (**Micronaut Security**, no Spring Security).
+- Contraseñas hasheadas con BCrypt (10 rondas); el hash nunca se expone.
+- Los endpoints `/api/accounts` y `/api/transactions/**` exigen `@Secured(SecurityRule.IS_AUTHENTICATED)` y filtran por el claim `userId` del JWT.
+- `/api/auth/**` es público (`@PermitAll`).
+- Validación de entrada con `micronaut-validation` + processor (`@Valid` + `@NotNull`, `@Positive`, `@Pattern`, etc.).
+- Rate limiting por IP, por usuario y para operaciones de transacción.
 
 ### Base de Datos
-- PostgreSQL 15 con migraciones Flyway
-- JDBC con Hikari Connection Pooling
-- Transacciones ACID garantizadas
-- Índices optimizados para queries frecuentes
-- Backups automáticos
+- PostgreSQL 15 en Podman, acceso JDBC con Hikari.
+- Flyway es el único dueño del esquema (`datasources.default.schema-generate=NONE`), con migraciones `V1__CreateTables.sql` y `V2__AddIndexes.sql`.
+- `@Transactional` por operación de escritura: fondos insuficientes o cuenta ajena revierten cambios y no dejan filas de `Transaction`.
+- Índices sobre `owner_id` y columnas de `transactions` (ver `V2__AddIndexes.sql`).
 
 ### API Profesional
-- Swagger UI integrado
-- OpenAPI documentation
-- Versionamiento de API
-- Códigos HTTP correctos
-- Manejo de errores consistente
-- Logs estructurados
-
-### Performance
-- Framework Micronaut optimizado para baja latencia
-- Compilación nativa GraalVM disponible
-- AOT (Ahead-of-Time) compilation
-- Fat JAR de ~50MB
-- Startup time < 1 segundo
+- Swagger UI anónima en `/swagger-ui.html` y `/swagger-ui/**`; especificación YAML servida en `/swagger/**`.
+- Respuestas de error con un payload único para `/api/**`.
+- Logs JSON por línea (Logstash encoder).
+- Health checks: `/health` y `/actuator/health`.
 
 ---
 
@@ -73,35 +69,37 @@ API REST profesional para simulación bancaria construida con Micronaut. Demuest
 
 ```
 BACKEND
-- Java 21 LTS
+- Java 21 LTS (Temurin)
 - Micronaut 4.10.12
-- Gradle 8.0+
+- Gradle wrapper 8.14.3 (plugin io.micronaut.application 4.6.2)
 
 SEGURIDAD
-- Spring Security (adaptado a Micronaut)
-- JWT (JSON Web Tokens)
-- BCrypt (Password Hashing)
+- Micronaut Security 4.15.2 + micronaut-security-jwt (HS256)
+- BCrypt (org.mindrot:jbcrypt 0.4) — bean propio PasswordEncoder
+- Sin refresh tokens
 
 BASE DE DATOS
-- PostgreSQL 15
-- Flyway (Database Migrations)
-- Micronaut Data JDBC
-- Hikari CP (Connection Pooling)
+- PostgreSQL 15 (contenedor Podman bank-api-db)
+- Flyway 10.22.0 (+ flyway-database-postgresql)
+- Micronaut Data JDBC + Hikari CP
 
 DOCUMENTACION
-- Swagger UI
-- OpenAPI 3.0
-- Micronaut OpenAPI
+- Swagger UI / OpenAPI generado por micronaut-openapi
+- Spec vivo: build/classes/java/main/META-INF/swagger/bank-account-api-1.0.yml
 
 BUILD & RUNTIME
-- GraalVM Native Image (opcional)
-- Shadow JAR (Fat JAR)
-- Docker (Multi-stage builds)
+- Fat JAR con com.gradleup.shadow 8.3.9 (build/libs/bankaccount-0.1-all.jar, ~25 MB)
+- Dockerfile multi-stage construido con Podman
+- GraalVM nativeImage: opcional, NO ejecutado (GraalVM no instalada)
+
+OBSERVABILIDAD
+- micronaut-management (/actuator/health)
+- logstash-logback-encoder 8.1 (logs JSON)
 
 TESTING
-- JUnit 5
-- Testcontainers
-- REST Assured
+- JUnit 5 + Micronaut HttpClient
+- JaCoCo 0.8.13 (cobertura y verificación >= 70% de líneas)
+- Testcontainers y REST Assured: NO usados (se comparte el contenedor Podman y se usa Micronaut HttpClient)
 ```
 
 ---
@@ -111,49 +109,59 @@ TESTING
 ### Prerequisitos
 
 ```bash
-- Java 21+
-- Gradle 8.0+
-- PostgreSQL 15+
-- Docker (opcional)
+# JDK 21 (esta máquina no tiene java en PATH)
+export JAVA_HOME=/home/void/AI/apps/jdk-21
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# Podman 6.1.4 (no Docker) para la base de datos
+podman --version
 ```
 
-### Instalación Local
+No hay PostgreSQL instalado en el host: se usa un contenedor Podman. Gradle se ejecuta mediante el wrapper incluido (`./gradlew`), que descarga la distribución 8.14.3 la primera vez.
+
+### 1. Arrancar PostgreSQL 15 en Podman
 
 ```bash
-# 1. Clonar repositorio
-git clone https://github.com/Cesar-Plyed/bank_api.git
-cd bank_api
+podman pull docker.io/library/postgres:15   # una sola vez
+podman run -d --name bank-api-db \
+  -e POSTGRES_DB=bank_api \
+  -e POSTGRES_USER=bank_user \
+  -e POSTGRES_PASSWORD=bank_pass \
+  -p 127.0.0.1:5432:5432 \
+  docker.io/library/postgres:15
 
-# 2. Crear base de datos
-createdb bank_api
-createuser bank_user -P  # Ingresar contraseña
+podman ps
+podman exec bank-api-db psql -U bank_user -d bank_api -c '\dt'   # V1/V2 aplicadas por Flyway
+```
 
-# 3. Compilar proyecto
-./gradlew build
+El esquema lo crea Flyway en el primer arranque de la app (`schema-generate=NONE`). Parar/reiniciar: `podman stop bank-api-db` / `podman start bank-api-db`. **No borrar el contenedor ni su volumen.**
 
-# 4. Ejecutar aplicación
+### 2. Ejecutar tests y arrancar la app
+
+```bash
+export JAVA_HOME=/home/void/AI/apps/jdk-21
+export PATH="$JAVA_HOME/bin:$PATH"
+
+./gradlew test                                   # 55 tests, requiere bank-api-db activo
+./gradlew test jacocoTestReport jacocoTestCoverageVerification   # + reporte de cobertura
+
+# Definir un secreto JWT propio (el default solo es de desarrollo)
+export JWT_SECRET='cambia-este-valor-por-al-menos-32-bytes-256-bits'
 ./gradlew run
-
-# 5. Acceder a Swagger UI
-# Abrir http://localhost:8080/swagger-ui.html
 ```
 
-### Con Docker
+Acceder a Swagger UI en `http://localhost:8080/swagger-ui.html` y al health check en `http://localhost:8080/health`.
+
+### 3. Construir la imagen con Podman
 
 ```bash
-# Compilar imagen Docker
-docker build -t bank-api .
-
-# Ejecutar contenedor
-docker run -p 8080:8080 \
-  -e DB_HOST=host.docker.internal \
-  -e DB_USER=bank_user \
-  -e DB_PASSWORD=secure_password \
-  bank-api
-
-# Acceder a API
-curl http://localhost:8080/health
+podman build -t bank-api:spec09 .
+podman run -d --rm --name bank-api-smoke09 --network host -e SERVER_PORT=8080 bank-api:spec09
+curl http://127.0.0.1:8080/health       # 200 {"status":"UP"}
+podman stop bank-api-smoke09            # con --rm se autodestruye
 ```
+
+`--network host` es necesario en el smoke test porque el datasource apunta a `127.0.0.1:5432` (el `bank-api-db` del host). En producción hace falta una red compartida o un `BANK_DB_HOST` apropiado.
 
 ---
 
@@ -164,576 +172,400 @@ bank_api/
 ├── src/
 │   ├── main/
 │   │   ├── java/io/onstructive/micronaut/
-│   │   │   ├── Application.java                # Punto de entrada
-│   │   │   │
+│   │   │   ├── Application.java                 # Punto de entrada
 │   │   │   ├── controller/
-│   │   │   │   ├── AuthController.java         # Autenticación
-│   │   │   │   ├── AccountController.java      # Cuentas
-│   │   │   │   └── TransactionController.java  # Transacciones
-│   │   │   │
+│   │   │   │   ├── AuthController.java          # /api/auth (register, login)
+│   │   │   │   ├── AccountController.java       # /api/accounts (CRUD por dueño)
+│   │   │   │   ├── TransactionController.java   # /api (transacciones + historial)
+│   │   │   │   └── HealthController.java        # /health
 │   │   │   ├── service/
-│   │   │   │   ├── AuthService.java            # Lógica de auth
-│   │   │   │   ├── AccountService.java         # Gestión de cuentas
-│   │   │   │   ├── TransactionService.java     # Gestión de transacciones
-│   │   │   │   └── JwtTokenService.java        # Generación JWT
-│   │   │   │
+│   │   │   │   ├── AccountService.java
+│   │   │   │   └── TransactionService.java      # @Transactional por operación
 │   │   │   ├── model/
-│   │   │   │   ├── User.java                   # Entidad Usuario
-│   │   │   │   ├── Account.java                # Entidad Cuenta
-│   │   │   │   ├── Transaction.java            # Entidad Transacción
-│   │   │   │   └── dto/
-│   │   │   │       ├── LoginRequest.java
-│   │   │   │       ├── LoginResponse.java
-│   │   │   │       └── TransactionRequest.java
-│   │   │   │
+│   │   │   │   ├── User.java, Account.java, Transaction.java
+│   │   │   │   ├── AccountType.java, AccountStatus.java
+│   │   │   │   ├── TransactionType.java, TransactionStatus.java
+│   │   │   │   └── (los DTOs viven en el paquete dto/, ver abajo)
+│   │   │   ├── dto/
+│   │   │   │   ├── RegisterRequest.java, LoginRequest.java
+│   │   │   │   ├── LoginResponse.java, UserResponse.java
+│   │   │   │   ├── CreateAccountRequest.java
+│   │   │   │   ├── TransactionRequest.java, TransferRequest.java
+│   │   │   │   ├── TransactionResponse.java, AmountRequest.java
 │   │   │   ├── repository/
-│   │   │   │   ├── UserRepository.java         # Data Access
-│   │   │   │   ├── AccountRepository.java
-│   │   │   │   └── TransactionRepository.java
-│   │   │   │
+│   │   │   │   ├── UserRepository.java, AccountRepository.java
+│   │   │   │   └── TransactionRepository.java   # todos con Dialect.POSTGRES
 │   │   │   ├── security/
-│   │   │   │   ├── JwtProvider.java            # JWT Provider
-│   │   │   │   ├── SecurityConfig.java         # Configuración seguridad
-│   │   │   │   └── JwtAuthenticationFilter.java
-│   │   │   │
+│   │   │   │   ├── PasswordEncoder.java         # BCrypt 10 rondas
+│   │   │   │   ├── UserAuthenticationProvider.java
+│   │   │   │   └── JwtTokenService.java
 │   │   │   ├── exception/
-│   │   │   │   ├── BankException.java
-│   │   │   │   ├── InsufficientFundsException.java
-│   │   │   │   └── GlobalExceptionHandler.java
-│   │   │   │
-│   │   │   └── util/
-│   │   │       ├── ValidationUtil.java
-│   │   │       └── CurrencyUtil.java
-│   │   │
+│   │   │   │   ├── BankException.java + 4 excepciones de dominio
+│   │   │   │   ├── ErrorPayload.java            # payload único
+│   │   │   │   ├── GlobalExceptionHandler.java
+│   │   │   │   └── ValidationExceptionHandler.java
+│   │   │   └── filter/
+│   │   │       └── RateLimitFilter.java         # @Filter("/api/**")
 │   │   └── resources/
-│   │       ├── application.yml                # Configuración
-│   │       └── db/
-│   │           └── migration/
-│   │               ├── V1__CreateTables.sql    # Flyway migration
-│   │               └── V2__AddIndexes.sql
-│   │
+│   │       ├── application.properties           # configuración real (no YAML)
+│   │       ├── logback.xml                      # logs JSON
+│   │       ├── openapi/bankaccount-0.0.yml       # placeholder obsoleto
+│   │       └── db/migration/
+│   │           ├── V1__CreateTables.sql
+│   │           └── V2__AddIndexes.sql
 │   └── test/
-│       ├── java/io/onstructive/micronaut/
-│       │   ├── controller/
-│       │   │   ├── AuthControllerTest.java
-│       │   │   ├── AccountControllerTest.java
-│       │   │   └── TransactionControllerTest.java
-│       │   │
-│       │   ├── service/
-│       │   │   ├── AuthServiceTest.java
-│       │   │   ├── AccountServiceTest.java
-│       │   │   └── TransactionServiceTest.java
-│       │   │
-│       │   └── integration/
-│       │       └── BankApiIntegrationTest.java
-│       │
-│       └── resources/
-│           └── application-test.yml
-│
-├── build.gradle.kts                          # Configuración Gradle
-├── settings.gradle.kts
-├── Dockerfile                                # Docker build
-├── .dockerignore
-├── README.md                                 # Este archivo
-└── LICENSE
+│       ├── java/io/onstructive/micronaut/       # 12 clases de test (55 tests)
+│       └── resources/application-test.yml       # ratelimit.enabled=false
+├── specs/                                       # specs SDD 00..10 (spec-NN.md + agent.md)
+├── build.gradle.kts, settings.gradle.kts, gradle.properties
+├── Dockerfile, .dockerignore
+├── logback.xml, openapi.properties
+├── AGENTS.md, NOTES.md, MEMORY.md, README.md
+└── LICENSE                                      # NO existe todavía (pendiente)
 ```
+
+El spec OpenAPI de verdad se genera en `build/classes/java/main/META-INF/swagger/bank-account-api-1.0.yml`; `src/main/resources/openapi/bankaccount-0.0.yml` es un placeholder obsoleto y no es fuente de verdad.
 
 ---
 
 ## API Endpoints
 
-### Autenticación
+Base: `http://localhost:8080`. Los bodies de petición/respuesta usan `application/json`. Todos los IDs son `UUID`.
 
-#### Registrar Usuario
+### Autenticación (público)
+
+#### Registrar usuario — `POST /api/auth/register`
+
 ```bash
-POST /api/auth/register
-Content-Type: application/json
-
-{
-  "username": "juan",
-  "email": "juan@example.com",
-  "password": "SecurePass123!"
-}
-
-Response:
-{
-  "id": 1,
-  "username": "juan",
-  "email": "juan@example.com",
-  "createdAt": "2024-01-15T10:30:00Z"
-}
+curl -X POST http://localhost:8080/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"juan","email":"juan@example.com","password":"SecurePass123!"}'
 ```
 
-#### Login
+`201 Created`:
+```json
+{ "id": "<uuid>", "username": "juan", "email": "juan@example.com" }
+```
+Si username o email ya existen: `409` con `error=CONFLICT`.
+
+#### Login — `POST /api/auth/login`
+
 ```bash
-POST /api/auth/login
-Content-Type: application/json
+curl -X POST http://localhost:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"juan","password":"SecurePass123!"}'
+```
 
-{
-  "username": "juan",
-  "password": "SecurePass123!"
-}
-
-Response:
+`200 OK`:
+```json
 {
   "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "tokenType": "Bearer",
   "expiresIn": 3600,
-  "user": {
-    "id": 1,
-    "username": "juan",
-    "email": "juan@example.com"
+  "user": { "id": "<uuid>", "username": "juan", "email": "juan@example.com" }
+}
+```
+Credenciales inválidas: `401` con `error=AUTHENTICATION_FAILED`.
+
+### Cuentas (requieren JWT)
+
+Todas exigen `Authorization: Bearer <TOKEN>` y operan solo sobre cuentas del usuario del claim `userId`. La ruta legacy `/accounts` ya no existe.
+
+#### Crear cuenta — `POST /api/accounts`
+
+```bash
+curl -X POST http://localhost:8080/api/accounts \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"accountNumber":"1001234567","currency":"USD","accountType":"SAVINGS","initialBalance":1000.00}'
+```
+
+`201 Created` (el `ownerId` se toma del JWT, nunca del body):
+```json
+{
+  "id": "<uuid>", "ownerId": "<uuid>", "accountNumber": "1001234567",
+  "currency": "USD", "balance": 1000.00, "accountType": "SAVINGS",
+  "status": "ACTIVE", "createdAt": "2026-11-25T10:30:00Z"
+}
+```
+`accountType` es `CHECKING` o `SAVINGS`; `currency` son 3 letras mayúsculas; `initialBalance` es opcional (por defecto 0).
+
+#### Listar / consultar / borrar
+
+```bash
+GET    /api/accounts                  # 200 [Account...] (solo propias)
+GET    /api/accounts/{id}             # 200 Account; 404 si no existe o es ajena
+DELETE /api/accounts/{id}             # 204 si saldo=0; 400 si tiene saldo; 404 si ajena/inexistente
+```
+
+### Transacciones (requieren JWT)
+
+El dueño se lee del claim `userId` del JWT, nunca del body.
+
+#### Depósito — `POST /api/transactions/deposit`
+
+```bash
+curl -X POST http://localhost:8080/api/transactions/deposit \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"accountId":"<uuid>","amount":500.00,"description":"Depósito de nómina"}'
+```
+
+`201 Created`:
+```json
+{
+  "id": "<uuid>", "fromAccount": null, "toAccount": "<uuid>",
+  "amount": 500.00, "type": "DEPOSIT", "status": "COMPLETED",
+  "timestamp": "2026-11-25T16:00:00Z", "description": "Depósito de nómina"
+}
+```
+
+#### Retiro — `POST /api/transactions/withdraw`
+
+Body: `{"accountId":"<uuid>","amount":100.00,"description":"..."}`.
+`201 Created` con `type=WITHDRAWAL`, `fromAccount=<uuid>`, `toAccount=null`. Fondos insuficientes → `400` con `error=INSUFFICIENT_FUNDS`.
+
+#### Transferencia — `POST /api/transactions/transfer`
+
+Body: `{"fromAccountId":"<uuid>","toAccountId":"<uuid>","amount":250.00,"description":"..."}`.
+`201 Created` con `type=TRANSFER`, ambas cuentas definidas. Cuenta ajena/inexistente → `404`; transferir a la misma cuenta → `400 BUSINESS_RULE_VIOLATION`.
+
+#### Historial — `GET /api/accounts/{accountId}/transactions`
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/accounts/<uuid>/transactions
+```
+
+`200 OK` con un array de `TransactionResponse` (movimientos donde la cuenta es origen o destino). Cuenta ajena/inexistente → `404`.
+
+### Health
+
+```bash
+GET /health            # 200 {"status":"UP"}  (público)
+GET /actuator/health   # público, con status=UP y detalles
+```
+
+Ejemplo simplificado de `/actuator/health`:
+```json
+{
+  "name": "bankaccount", "status": "UP",
+  "details": {
+    "diskSpace": { "status": "UP", "details": { "total": ..., "free": ..., "threshold": 10485760 } },
+    "jdbc": { "status": "UP", "details": { "database": "PostgreSQL", "version": "15.20 ..." } }
   }
 }
 ```
-
-### Cuentas
-
-#### Crear Cuenta
-```bash
-POST /api/accounts
-Authorization: Bearer <TOKEN>
-Content-Type: application/json
-
-{
-  "accountNumber": "1001234567",
-  "accountType": "SAVINGS",
-  "initialBalance": 1000.00,
-  "currency": "USD"
-}
-
-Response:
-{
-  "id": 1,
-  "accountNumber": "1001234567",
-  "accountType": "SAVINGS",
-  "balance": 1000.00,
-  "currency": "USD",
-  "createdAt": "2024-01-15T10:30:00Z"
-}
-```
-
-#### Obtener Cuenta
-```bash
-GET /api/accounts/{id}
-Authorization: Bearer <TOKEN>
-
-Response:
-{
-  "id": 1,
-  "accountNumber": "1001234567",
-  "balance": 1000.00,
-  "accountType": "SAVINGS",
-  "currency": "USD",
-  "status": "ACTIVE",
-  "lastTransaction": "2024-01-15T15:45:00Z"
-}
-```
-
-#### Listar Cuentas del Usuario
-```bash
-GET /api/accounts
-Authorization: Bearer <TOKEN>
-
-Response:
-[
-  {
-    "id": 1,
-    "accountNumber": "1001234567",
-    "balance": 1000.00,
-    "accountType": "SAVINGS"
-  },
-  {
-    "id": 2,
-    "accountNumber": "2001234567",
-    "balance": 5000.00,
-    "accountType": "CHECKING"
-  }
-]
-```
-
-### Transacciones
-
-#### Depósito
-```bash
-POST /api/transactions/deposit
-Authorization: Bearer <TOKEN>
-Content-Type: application/json
-
-{
-  "accountId": 1,
-  "amount": 500.00,
-  "description": "Depósito de nómina"
-}
-
-Response:
-{
-  "id": 1,
-  "fromAccount": null,
-  "toAccount": 1,
-  "amount": 500.00,
-  "type": "DEPOSIT",
-  "status": "COMPLETED",
-  "timestamp": "2024-01-15T16:00:00Z",
-  "description": "Depósito de nómina"
-}
-```
-
-#### Retiro
-```bash
-POST /api/transactions/withdraw
-Authorization: Bearer <TOKEN>
-Content-Type: application/json
-
-{
-  "accountId": 1,
-  "amount": 100.00,
-  "description": "Retiro en cajero"
-}
-
-Response:
-{
-  "id": 2,
-  "fromAccount": 1,
-  "toAccount": null,
-  "amount": 100.00,
-  "type": "WITHDRAWAL",
-  "status": "COMPLETED",
-  "timestamp": "2024-01-15T16:05:00Z"
-}
-```
-
-#### Transferencia
-```bash
-POST /api/transactions/transfer
-Authorization: Bearer <TOKEN>
-Content-Type: application/json
-
-{
-  "fromAccountId": 1,
-  "toAccountId": 2,
-  "amount": 250.00,
-  "description": "Pago a proveedor"
-}
-
-Response:
-{
-  "id": 3,
-  "fromAccount": 1,
-  "toAccount": 2,
-  "amount": 250.00,
-  "type": "TRANSFER",
-  "status": "COMPLETED",
-  "timestamp": "2024-01-15T16:10:00Z"
-}
-```
-
-#### Historial de Transacciones
-```bash
-GET /api/accounts/{accountId}/transactions
-Authorization: Bearer <TOKEN>
-
-Response:
-[
-  {
-    "id": 1,
-    "type": "DEPOSIT",
-    "amount": 500.00,
-    "timestamp": "2024-01-15T16:00:00Z",
-    "description": "Depósito de nómina"
-  },
-  {
-    "id": 2,
-    "type": "WITHDRAWAL",
-    "amount": 100.00,
-    "timestamp": "2024-01-15T16:05:00Z"
-  }
-]
-```
-
-### Health Check
-
-```bash
-GET /health
-Response: {"status":"UP"}
-
-GET /actuator/health
-Response: 
-{
-  "status": "UP",
-  "database": "UP",
-  "diskSpace": "UP"
-}
-```
+El indicador JDBC se llama `jdbc` (con `database` como clave interna), no `database`. Los detalles son visibles sin token (`endpoints.health.details-visible=ANONYMOUS`).
 
 ---
 
 ## Configuración
 
-### application.yml
+La configuración real vive en `src/main/resources/application.properties` (**no** en `application.yml`). Fragmentos relevantes:
 
-```yaml
-micronaut:
-  application:
-    name: bank-api
-  security:
-    jwt:
-      enabled: true
-      secret: ${JWT_SECRET:your-secret-key-min-256-bits}
-      expiration: 3600
+```properties
+datasources.default.dialect=POSTGRES
+datasources.default.url=jdbc:postgresql://${BANK_DB_HOST:127.0.0.1}:${BANK_DB_PORT:5432}/${BANK_DB_NAME:bank_api}
+datasources.default.username=${BANK_DB_USER:bank_user}
+datasources.default.password=${BANK_DB_PASSWORD:bank_pass}
+datasources.default.schema-generate=NONE
+flyway.datasources.default.enabled=true
 
-datasources:
-  default:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:bank_api}
-    username: ${DB_USER:bank_user}
-    password: ${DB_PASSWORD:password}
-    dialect: POSTGRES
+micronaut.application.name=bankaccount
+micronaut.server.port=${SERVER_PORT:8080}
 
-jpa:
-  default:
-    packages-to-scan: io.onstructive.micronaut.model
-    properties:
-      hibernate.hbm2ddl.auto: none
-      hibernate.format_sql: true
+micronaut.security.enabled=true
+micronaut.security.token.jwt.signatures.secret.generator.secret=${JWT_SECRET:dev-only-secret-change-me-please-32bytes}
+micronaut.security.token.jwt.generator.access.expiration=3600
 
-endpoints:
-  all:
-    path: /actuator
-  health:
-    enabled: true
-  metrics:
-    enabled: true
+endpoints.all.path=/actuator
+endpoints.health.enabled=true
+endpoints.health.sensitive=false
+endpoints.health.details-visible=ANONYMOUS
 
-logging:
-  level:
-    io.onstructive.micronaut: DEBUG
-    org.hibernate: INFO
+ratelimit.enabled=true
+ratelimit.per-ip.minute=100
+ratelimit.per-user.hour=1000
+ratelimit.transactions.minute=10
 ```
 
-### Variables de Entorno
+### Variables de entorno
 
 ```bash
-# Database
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=bank_api
-DB_USER=bank_user
-DB_PASSWORD=secure_password
+# Base de datos (defaults incluidos)
+BANK_DB_HOST=127.0.0.1
+BANK_DB_PORT=5432
+BANK_DB_NAME=bank_api
+BANK_DB_USER=bank_user
+BANK_DB_PASSWORD=bank_pass
 
-# Security
-JWT_SECRET=your-super-secret-key-must-be-at-least-256-bits-long
-JWT_EXPIRATION=3600
+# Seguridad: definir SIEMPRE en producción (>= 32 bytes / 256 bits para HS256)
+JWT_SECRET='valor-secreto-de-al-menos-32-bytes'
 
-# Server
+# Servidor
 SERVER_PORT=8080
-MICRONAUT_ENVIRONMENTS=prod
-
-# Logging
-LOG_LEVEL=INFO
 ```
+
+El valor por defecto de `JWT_SECRET` existe **solo para desarrollo y tests**; en producción debe sustituirse. La URL JDBC se compone con placeholders sin colon en el default (un único `${BANK_DB_URL:jdbc:...}` se resolvía mal en Micronaut). En tests, `src/test/resources/application-test.yml` fija `ratelimit.enabled=false`.
 
 ---
 
 ## Seguridad
 
-### Políticas de Seguridad
+- **Micronaut Security** (no Spring Security): `micronaut.security.enabled=true` y `micronaut-security-jwt` con firma HS256.
+- El token JWT viaja en `Authorization: Bearer <token>`; expira en 3600 s (1 hora).
+- `sub` = username; atributos `userId` (UUID en texto) y `email`. El dueño de cada recurso se deduce del claim `userId`, nunca del body.
+- `/api/auth/**` es público (`@PermitAll`). `/api/accounts`, `/api/transactions/**` y `/api/accounts/{id}/transactions` llevan `@Secured(SecurityRule.IS_AUTHENTICATED)`: sin token → `401`; con token pero sin esta anotación Micronaut respondería `403`.
+- Swagger UI, `/health` y `/actuator/**` son anónimos vía `intercept-url-map`.
+- Contraseñas hasheadas con BCrypt 10 rondas (`$2a$`/`$2b$`), nunca en texto plano.
+- **Refresh tokens: no implementados** (fuera de alcance del roadmap).
 
-1. **Autenticación JWT**
-   - Token en header: Authorization: Bearer <token>
-   - Expiración: 1 hora (configurable)
-   - Refresh token: No implementado (pendiente)
+### Rate limiting
 
-2. **Encriptación**
-   - Contraseñas: BCrypt (10 rounds)
-   - Datos sensibles: AES-256 (en transporte)
-   - SSL/TLS: Requerido en producción
+`RateLimitFilter` (`@Filter("/api/**")`, orden posterior al filtro de seguridad) aplica ventanas fijas en memoria:
 
-3. **Validación**
-   - Todas las entradas validadas
-   - SQL Injection: Prevenido con prepared statements
-   - XSS: No aplica (JSON API)
-   - CSRF: Token en POST/PUT/DELETE
+| Ámbito | Límite por defecto |
+| --- | --- |
+| IP (por minuto) | 100 |
+| Usuario autenticado (por hora) | 1000 |
+| Transacciones (por minuto) | 10 |
 
-4. **Rate Limiting**
-   - 100 requests/minuto por IP
-   - 1000 requests/hora por usuario
-   - Endpoint específico: 10 transacciones/minuto
+El bucket de transacciones cubre tanto `/api/transactions/**` como `GET /api/accounts/{accountId}/transactions` y comparten contador. La IP se resuelve de `X-Forwarded-For` (con fallback al socket). Al excederse → `429` con `error=RATE_LIMIT_EXCEEDED` y el payload único.
 
-### Autenticación en Endpoints
-
-```bash
-# Con JWT válido
-curl -H "Authorization: Bearer eyJhbGc..." http://localhost:8080/api/accounts
-
-# Sin autenticación
-curl http://localhost:8080/api/accounts
-# Response: 401 Unauthorized
-
-# Token expirado
-curl -H "Authorization: Bearer expired_token" http://localhost:8080/api/accounts
-# Response: 401 Token expired
-```
+**Desviación:** los contadores son en memoria, por instancia: se reinician al arrancar y no se comparten entre réplicas (no hay Redis).
 
 ---
 
 ## Transacciones
 
-### Garantías ACID
-
-- **Atomicidad**: Toda o nada (transferencia bidireccional)
-- **Consistencia**: Balance siempre válido
-- **Aislamiento**: Level READ_COMMITTED
-- **Durabilidad**: PostgreSQL WAL (Write-Ahead Logging)
-
-### Ejemplo: Transferencia Segura
+`TransactionService` aplica `@Transactional(rollbackFor = Exception.class)` a `deposit`, `withdraw` y `transfer`, y `@Transactional(readOnly = true)` a `history`. Cada operación de escritura: verificar propiedad → validar fondos → actualizar balances → guardar exactamente una `Transaction` (`status=COMPLETED`, `Instant.now()`) en la misma transacción. Si falla una regla de negocio, todo se revierte (balances y filas intactos, verificado por tests con `TransactionRepository.count()`).
 
 ```java
-// Código en TransactionService.java
-@Transactional
-public Transaction transfer(Long fromId, Long toId, BigDecimal amount) {
-    // 1. Verificar existencia de cuentas
-    Account from = accountRepository.findById(fromId).orElseThrow();
-    Account to = accountRepository.findById(toId).orElseThrow();
-    
-    // 2. Validar fondos
-    if (from.getBalance().compareTo(amount) < 0) {
-        throw new InsufficientFundsException();
+// Esquema de TransactionService (simplificado)
+@Transactional(rollbackFor = Exception.class)
+public Transaction transfer(UUID fromId, UUID toId, BigDecimal amount, UUID ownerId) {
+    Account from = owned(fromId, ownerId);   // 404 si no existe o es ajena
+    Account to   = owned(toId, ownerId);     // 404 si no existe o es ajena
+    if (from.balance().compareTo(amount) < 0) {
+        throw new InsufficientFundsException();  // 400 -> rollback
     }
-    
-    // 3. Actualizar balances (ATOMIC)
-    from.setBalance(from.getBalance().subtract(amount));
-    to.setBalance(to.getBalance().add(amount));
-    
-    accountRepository.update(from);
-    accountRepository.update(to);
-    
-    // 4. Registrar transacción
-    Transaction tx = new Transaction(from, to, amount);
-    return transactionRepository.save(tx);
-    // Si algo falla, TODO se revierte (rollback)
+    // actualizar balances y guardar una sola Transaction COMPLETED
+    ...
 }
 ```
+
+No se usan FK entre tablas (decisión de diseño fuera de alcance); `owner_id`, `from_account_id` y `to_account_id` son `UUID`.
+
+---
+
+## Manejo de errores
+
+Todas las respuestas de error bajo `/api/**` usan un único payload (incluidos los errores de autenticación y el 429):
+
+```json
+{
+  "error": "NOT_FOUND",
+  "message": "<texto legible>",
+  "path": "/api/accounts/<uuid>",
+  "timestamp": "2026-11-25T16:00:00Z",
+  "fieldErrors": { "amount": "must be positive" }
+}
+```
+
+`fieldErrors` es opcional: solo aparece en errores de validación (400). El status HTTP viaja en la respuesta, no en el cuerpo.
+
+| Situación | HTTP | `error` |
+| --- | --- | --- |
+| Cuenta inexistente o ajena | 404 | `NOT_FOUND` |
+| Fondos insuficientes | 400 | `INSUFFICIENT_FUNDS` |
+| Regla de negocio (borrar con saldo, transferir a la misma cuenta) | 400 | `BUSINESS_RULE_VIOLATION` |
+| Body inválido (`@Valid`) | 400 | `VALIDATION_ERROR` (con `fieldErrors`) |
+| Recurso duplicado | 409 | `CONFLICT` |
+| Credenciales inválidas en login | 401 | `AUTHENTICATION_FAILED` |
+| Sin token / token inválido | 401 | gestionado por Micronaut Security |
+| Error inesperado | 500 | `INTERNAL_ERROR` (mensaje genérico, sin stack trace) |
+| Exceso de peticiones | 429 | `RATE_LIMIT_EXCEEDED` |
+
+Los controllers ya no traducen excepciones con `try/catch`: lo hace `GlobalExceptionHandler`, con `ValidationExceptionHandler` (`@Replaces`) para las violaciones de `@Valid`.
 
 ---
 
 ## Testing
 
-### Ejecutar Tests
+La suite requiere el contenedor `bank-api-db` activo en `127.0.0.1:5432`; si la BD no está arriba, `./gradlew test` falla.
 
 ```bash
-# Todos los tests
-./gradlew test
+./gradlew test                                   # 55 tests, 0 failures/errors en 12 clases
+./gradlew test --tests "*Auth*Test"               # subconjuntos
+./gradlew test --tests "*Account*Test"
+./gradlew test --tests "*Transaction*Test"
+./gradlew test --tests "*Error*Test"
+./gradlew test --tests "*Health*Test"
+./gradlew test --tests "*RateLimit*Test"
 
-# Test específico
-./gradlew test --tests "*AuthControllerTest"
-
-# Con cobertura
-./gradlew test jacocoTestReport
-
-# Ver reporte
-open build/reports/jacoco/test/html/index.html
+./gradlew test jacocoTestReport jacocoTestCoverageVerification
 ```
 
-### Ejemplo de Test
+Clases de test: `BankaccountTest` (smoke), `RepositoryTest`, `AuthControllerTest` (4), `AccountControllerTest` (6), `TransactionControllerTest` (7), `ErrorHandlingTest` (8), `HealthControllerTest` (5), `RateLimitTest` (4), `RateLimitDisabledTest` (1), `AccountServiceTest` (8), `TransactionServiceTest` (8) y `BankApiIntegrationTest` (2 E2E). Los tests HTTP y de servicio usan `@MicronautTest(transactional=false)` para que el cliente vea datos confirmados.
 
-```java
-@MicronautTest
-class AuthControllerTest {
-    
-    @Inject
-    HttpClient client;
-    
-    @Test
-    void testLoginSuccess() {
-        LoginRequest request = new LoginRequest("juan", "Pass123!");
-        LoginResponse response = client.toBlocking()
-            .retrieve(HttpRequest.POST("/api/auth/login", request), 
-                     LoginResponse.class);
-        
-        assertNotNull(response.getAccessToken());
-        assertEquals("juan", response.getUser().getUsername());
-    }
-    
-    @Test
-    void testLoginInvalidCredentials() {
-        LoginRequest request = new LoginRequest("juan", "wrongpass");
-        HttpClientResponseException ex = assertThrows(
-            HttpClientResponseException.class,
-            () -> client.toBlocking()
-                .retrieve(HttpRequest.POST("/api/auth/login", request))
-        );
-        
-        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
-    }
-}
+**Cobertura real (2026-11-25, umbral de 70% de líneas no rebajado):**
+
+| Contador | Cubiertos | Total | Porcentaje |
+| --- | --- | --- | --- |
+| Línea | 305 | 338 | **90.24%** |
+| Instrucción | 1512 | 1613 | 93.74% |
+| Rama | 84 | 112 | 75.00% |
+
+Reportes: `build/reports/jacoco/test/html/index.html` y `build/reports/jacoco/test/jacocoTestReport.xml`.
+
+**Desviaciones:** Testcontainers no se usa (se comparte el contenedor Podman `bank-api-db`) y REST Assured no se usa (se usa `Micronaut HttpClient` con `toBlocking()`). Dos clases quedan al 0% de líneas (`Application.main` y el DTO `AmountRequest`, fuera del flujo de negocio), pero la verificación es por bundle y el global supera el umbral.
+
+---
+
+## Observabilidad
+
+- `/health`: endpoint público que devuelve `{"status":"UP"}`.
+- `/actuator/health`: expone `status=UP` y `details` (indicador de disco `diskSpace` y JDBC bajo `jdbc`, con `database` como detalle interno). Los detalles son visibles sin token (`endpoints.health.details-visible=ANONYMOUS`).
+- Swagger UI anónima en `/swagger-ui.html` y `/swagger-ui/**`; el YAML generado se sirve en `/swagger/**`. `AuthController` lleva `@Tag`/`@Operation` para documentar registro y login.
+- Logs JSON por línea con Logstash encoder: `timestamp`, `level`, `logger`, `message` (más `@version`, `thread`, `level_value`), configurados en `logback.xml`.
+
+---
+
+## Empaquetado
+
+`Dockerfile` multi-stage: etapa de build con `eclipse-temurin:21-jdk` ejecuta `./gradlew --no-daemon --console=plain shadowJar`; etapa final con `eclipse-temurin:21-jre` crea el usuario no root `bankapi`, copia `bankaccount-0.1-all.jar` como `/app/bankaccount.jar`, expone 8080 y usa `ENTRYPOINT ["java","-jar","/app/bankaccount.jar"]`. `.dockerignore` excluye `.git`, `.gradle`, `build/`, `.idea/`, `specs/` y `*.md`.
+
+```bash
+./gradlew shadowJar                 # build/libs/bankaccount-0.1-all.jar (~25 MB, medido)
+podman build -t bank-api:spec09 .
 ```
+
+La imagen construida es `localhost/bank-api:spec09` (~400 MB). La variable `SERVER_PORT` (default 8080) permite cambiar el puerto dentro del contenedor sin reconstruir la imagen.
 
 ---
 
 ## Performance
 
-### Benchmarks
+No se publican cifras de latencia, memoria ni throughput: **no fueron medidas**. Lo que sí está verificado:
 
-```
-Startup time:     < 1 segundo
-Memory usage:     ~250MB
-Requests/seg:     5,000+ (single instance)
-Latency (p95):    < 50ms
-DB Connection:    Hikari (max 10 connections)
-```
-
-### Optimizaciones
-
-1. **Compilación AOT**
-   ```bash
-   ./gradlew nativeImage
-   # Resultado: executable en ./build/native/bank-api
-   ```
-
-2. **Caché de Queries**
-   ```java
-   @Cacheable(value = "accounts")
-   Account findById(Long id) { ... }
-   ```
-
-3. **Índices de Base de Datos**
-   ```sql
-   CREATE INDEX idx_account_user_id ON account(user_id);
-   CREATE INDEX idx_transaction_from_account ON transaction(from_account_id);
-   CREATE INDEX idx_transaction_to_account ON transaction(to_account_id);
-   ```
+- Micronaut 4.10.12 sobre Netty; `TaskExecutors.IO` en los controllers con acceso JDBC.
+- Pool Hikari para PostgreSQL y índices en `V2__AddIndexes.sql` (`owner_id`, columnas de `transactions`).
+- Fat JAR ejecutable sobre JRE (~25 MB, tamaño medido del artefacto).
+- Compilación nativa GraalVM (`./gradlew nativeImage`) queda como **opcional y no ejecutada**: esta máquina solo tiene Temurin 21, se distribuye el fat JAR, no un binario nativo. Tampoco se midió el arranque de la imagen nativa.
 
 ---
 
 ## Troubleshooting
 
 | Error | Solución |
-|-------|----------|
-| Connection refused (DB) | Verificar PostgreSQL está corriendo: psql -U postgres |
-| Invalid JWT token | Token expirado. Hacer login nuevamente |
-| Insufficient funds | Balance insuficiente en cuenta |
-| Account not found | ID de cuenta no existe. Verificar con GET /api/accounts |
-| Rate limit exceeded | Esperar 1 minuto antes de reintentar |
-
----
-
-## Generar Native Image
-
-```bash
-# Requisitos: GraalVM 21+
-export GRAALVM_HOME=/path/to/graalvm
-
-# Compilar imagen nativa
-./gradlew nativeImage
-
-# Resultado
-./build/native/bank-api
-
-# Ejecutar
-./build/native/bank-api
-# Startup: ~50ms
-# Memory: ~50MB
-```
+| --- | --- |
+| `Connection refused` / fallo de tests | Verificar `podman ps` y que `bank-api-db` esté activo; si no, `podman start bank-api-db`. |
+| `Invalid JDBC URL` / `Unsupported Database: PostgreSQL` | Revisar `BANK_DB_*` y que `flyway-database-postgresql` esté en el build; la URL debe componerse con placeholders sin colon en el default. |
+| `401 Unauthorized` | Falta o expiró el JWT: hacer login de nuevo y enviar `Authorization: Bearer <token>`. |
+| `403 Forbidden` con token válido | La ruta no tiene regla `@Secured`/`@PermitAll` explícita; verificar la anotación del controller. |
+| `400 INSUFFICIENT_FUNDS` | Balance insuficiente en la cuenta. |
+| `404 NOT_FOUND` | Cuenta inexistente o ajena al `userId` del JWT. |
+| `429 RATE_LIMIT_EXCEEDED` | Se superó alguna ventana; esperar a que se reinicie el bucket (en memoria). |
+| `./gradlew` falla al arrancar | Exportar `JAVA_HOME=/home/void/AI/apps/jdk-21` y añadir `$JAVA_HOME/bin` al `PATH`. |
 
 ---
 
@@ -744,7 +576,7 @@ export GRAALVM_HOME=/path/to/graalvm
 - [x] Transacciones (depósito, retiro, transferencia)
 - [x] Swagger UI
 - [x] Flyway migrations
-- [ ] Tests completos (JUnit 5 + Testcontainers)
+- [x] Tests completos (JUnit 5 + Micronaut HttpClient + JaCoCo; 55 tests, 90.24% líneas)
 - [ ] Refresh tokens
 - [ ] Auditoría de transacciones
 - [ ] API versioning
@@ -752,36 +584,16 @@ export GRAALVM_HOME=/path/to/graalvm
 - [ ] Websockets para notificaciones
 - [ ] Reportes financieros
 
+> Testcontainers y REST Assured aparecían en el roadmap aspiracional, pero **no se usaron**: la suite comparte el contenedor Podman y usa `Micronaut HttpClient`. "Tests completos" se refiere a la cobertura real indicada arriba.
+
 ---
 
 ## Contribuir
 
-1. Fork el repositorio
-2. Crear branch: git checkout -b feature/mi-feature
-3. Commit: git commit -m "feat: descripción"
-4. Push: git push origin feature/mi-feature
-5. Abrir Pull Request
+El desarrollo sigue SDD: cada spec vive en `specs/NN-spec/` con `spec-NN.md` y `agent.md`; un sub agente implementa sin commitear, el orquestador verifica y aprueba, y se hace un commit por spec con Conventional Commits (`feat`, `fix`, `docs`, `test`, `refactor`, `build`, etc.). No se hacen push, reset ni borrados sin autorización explícita.
 
 ---
 
 ## Licencia
 
-MIT License - ver LICENSE
-
----
-
-## Autor
-
-Cesar Plyed - [@Cesar-Plyed](https://github.com/Cesar-Plyed)
-
-### Contacto
-
-- Email: contact@example.com
-- Issues: GitHub Issues
-- LinkedIn: Tu Perfil
-
----
-
-Si te fue útil, dale una estrella!
-
-[GitHub](https://github.com/Cesar-Plyed/bank_api) | [Volver arriba](#bank-api-simulator)
+**Pendiente:** no existe archivo `LICENSE` en el repo. La mención anterior a "MIT License" no estaba respaldada por ningún fichero; se documenta aquí como tarea pendiente en lugar de inventar una licencia.
