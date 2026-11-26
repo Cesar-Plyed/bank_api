@@ -271,3 +271,61 @@ Seguimiento de avance, cambios e incidencias. Fecha de hoy: **2026-11-25**.
 6. Las filas de prueba quedan en la BD (convención ya aceptada). Contenedor `bank-api-db` dejado activo; no se borró nada. Warning SLF4J sin providers sigue apareciendo, no bloqueante.
 
 **No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(errors): payload único y excepciones de dominio (spec-05)`.
+
+## 2026-11-25 — spec-06: Observabilidad (Swagger, health y logs JSON)
+
+**Acciones realizadas:**
+- `AuthController` anotado con `@Tag(name="Auth", ...)` y `@Operation` en `register`/`login` para que el spec generado documente explícitamente ambos endpoints públicos.
+- Swagger UI anónima: `/swagger-ui.html` y `/swagger-ui/**` con `intercept-url-map` `isAnonymous()`, más un alias de recurso estático (`micronaut.router.static-resources.swagger-ui-root`) que resuelve `/swagger-ui.html` al `index.html` de la UI. El YAML se sirve desde `/swagger/**`. Verificado: `/swagger-ui.html` → 200 sin token y `/swagger/bank-account-api-1.0.yml` → 200.
+- `build.gradle.kts`: añadidas `io.micronaut:micronaut-management` (4.10.21) y `net.logstash.logback:logstash-logback-encoder:8.1` (runtime + testImplementation). Se añadió `logback-classic` a `testImplementation` para poder inspeccionar el encoder desde el test.
+- `application.properties`: `endpoints.all.path=/actuator`, `endpoints.health.enabled=true`, `endpoints.health.details.enabled=true`, `endpoints.health.sensitive=false`, `endpoints.health.details-visible=ANONYMOUS`; reglas `isAnonymous()` para `/health` y `/actuator/**`.
+- `HealthController` público en `/health` (`@PermitAll`) que devuelve `{"status":"UP"}`.
+- `logback.xml`: `LogstashEncoder` con nombres de campo `timestamp`, `level`, `logger`, `message` (además de `thread`, `stack_trace`, `@version`, `level_value`). Ejemplo real de línea:
+  `{"timestamp":"2026-11-25T20:29:42.771178784-06:00","@version":"1","message":"Established active environments: [test]","logger":"io.micronaut.context.DefaultApplicationContext$RuntimeConfiguredEnvironment","thread":"Test worker","level":"INFO","level_value":20000}`
+- `HealthControllerTest.java` (nuevo, 5 tests): `/health` → UP; `/actuator/health` → UP con `details.diskSpace` y detalle JDBC/`database`; `/swagger-ui.html` → 200 anónimo; el YAML generado contiene las 8 rutas `/api/**`; y el encoder configurado produce una línea JSON válida con los 4 campos obligatorios.
+
+**Verificación (salida literal):**
+- `./gradlew test --tests "*Health*Test" --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+
+  > Task :compileTestJava
+  Note: /home/void/AI/projects/bank_api/src/test/java/io/onstructive/micronaut/HealthControllerTest.java uses unchecked or unsafe operations.
+  Note: Recompile with -Xlint:unchecked for details.
+
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources NO-SOURCE
+  > Task :testClasses
+  > Task :test
+
+  BUILD SUCCESSFUL in 3s
+  5 actionable tasks: 2 executed, 3 up-to-date
+  ```
+- `./gradlew test --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+  > Task :compileTestJava UP-TO-DATE
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources NO-SOURCE
+  > Task :testClasses UP-TO-DATE
+  > Task :test
+
+  BUILD SUCCESSFUL in 8s
+  5 actionable tasks: 1 executed, 4 up-to-date
+  ```
+- XML de resultados: `AccountControllerTest: tests=6`, `AuthControllerTest: tests=4`, `BankaccountTest: tests=1`, `ErrorHandlingTest: tests=8`, `HealthControllerTest: tests=5`, `RepositoryTest: tests=1`, `TransactionControllerTest: tests=7`; **32 tests, skipped=0, failures=0, errors=0** (los 27 preexistentes siguen pasando).
+- Respuesta real de `/actuator/health` (sin token): `{"name":"bankaccount","status":"UP","details":{"compositeDiscoveryClient()":{...},"diskSpace":{"status":"UP","details":{"total":...,"free":...,"threshold":10485760}},"service":{...},"deadlockedThreads":{...},"gracefulShutdown":{...},"jdbc":{"status":"UP","details":{"jdbc:postgresql://127.0.0.1:5432/bank_api":{"details":{"database":"PostgreSQL","version":"15.20 ..."}}}}}}`.
+
+**Incidencias y desviaciones:**
+1. `endpoints.health.details.enabled=true` (literal de la spec) **no es una propiedad real** en Micronaut Management 4.10.21: la respuesta seguía siendo solo `{"status":"UP"}`. El nombre efectivo es `endpoints.health.details-visible`; se añadió `=ANONYMOUS` (junto con `sensitive=false`) para exponer los detalles sin token. Se conservó la propiedad literal de la spec por compatibilidad con el texto, documentando la real.
+2. El indicador de base de datos se llama **`jdbc`**, no `database`, en el payload de health. `database` aparece como clave interna en sus detalles (`"database":"PostgreSQL"`). El test comprueba `details.jdbc` y, de forma recursiva, la clave `database`; se documenta la diferencia de nomenclatura respecto al criterio literal.
+3. `/swagger-ui.html` no existía con la configuración previa (solo `/swagger-ui/**` → 200). Se añadió un alias de recurso estático apuntando al directorio de la UI: el resolvedor de Micronaut añade `index.html` cuando la ruta extraída está vacía, por eso el `paths` debe ser el directorio y no el fichero (apuntar al fichero daba 404).
+4. `HealthControllerTest` usa `ObjectMapper` de Jackson construido en el test (`io.micronaut.json.ObjectMapper` no está en el classpath de compilación de tests) y fija `setLoggerContext(context)` en el `LoggingEvent`, porque el encoder Logstash consulta el MDC del contexto al serializar; sin eso el test fallaba con NPE. No afecta a la configuración de producción.
+5. Warning no bloqueante en `compileTestJava`: "uses unchecked or unsafe operations" por el cast del `Encoder<?>` a `Encoder<LoggingEvent>` en el test del log.
+6. Durante la verificación manual se arrancó la app con `./gradlew run` y se detuvo (SIGTERM) antes de los tests; el contenedor `bank-api-db` sigue activo, no se borró nada. No se modificaron migraciones, specs ajenas ni se hizo commit (regla SDD).
+
+**No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(observability): Swagger, health y logs JSON (spec-06)`.

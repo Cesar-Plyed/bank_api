@@ -21,6 +21,8 @@ import io.onstructive.micronaut.repository.UserRepository;
 import io.onstructive.micronaut.security.JwtTokenService;
 import io.onstructive.micronaut.security.PasswordEncoder;
 import io.onstructive.micronaut.security.UserAuthenticationProvider;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.security.PermitAll;
 import jakarta.validation.Valid;
 import java.time.Instant;
@@ -29,6 +31,7 @@ import java.util.UUID;
 /** Registro y login JWT: ambos endpoints públicos (spec-02). */
 @Controller("/api/auth")
 @ExecuteOn(TaskExecutors.IO)
+@Tag(name = "Auth", description = "Public registration and JWT login (spec-06)")
 public class AuthController {
 
     /** Código estable del payload único para credenciales inválidas (spec-05). */
@@ -51,6 +54,7 @@ public class AuthController {
 
     @Post("/register")
     @PermitAll
+    @Operation(summary = "Register a user (public)")
     public HttpResponse<?> register(@Body @Valid RegisterRequest request) {
         if (userRepository.existsByUsername(request.username())
                 || userRepository.existsByEmail(request.email())) {
@@ -71,6 +75,7 @@ public class AuthController {
 
     @Post("/login")
     @PermitAll
+    @Operation(summary = "Login and obtain a JWT (public)")
     public HttpResponse<?> login(@Body @Valid LoginRequest request) {
         AuthenticationResponse result = authenticationProvider.authenticate(
                 (HttpRequest<?>) null,

@@ -32,12 +32,19 @@ dependencies {
     implementation("io.micronaut.serde:micronaut-serde-jackson")
     implementation("io.micronaut.validation:micronaut-validation")
     implementation("io.micronaut.sql:micronaut-jdbc-hikari")
+    // spec-06: management endpoints (/actuator/health) + health indicators.
+    implementation("io.micronaut:micronaut-management")
     compileOnly("io.micronaut:micronaut-http-client")
     compileOnly("io.micronaut.openapi:micronaut-openapi-annotations")
     runtimeOnly("ch.qos.logback:logback-classic")
+    // spec-06: encoder JSON de Logstash para logs estructurados por línea.
+    runtimeOnly("net.logstash.logback:logstash-logback-encoder:8.1")
     runtimeOnly("com.h2database:h2")
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("io.micronaut:micronaut-http-client")
+    // spec-06: el test del encoder necesita logback y Logstash en compile classpath.
+    testImplementation("ch.qos.logback:logback-classic")
+    testImplementation("net.logstash.logback:logstash-logback-encoder:8.1")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
