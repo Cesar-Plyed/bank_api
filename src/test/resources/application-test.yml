@@ -1,4 +1,5 @@
-# spec-07: los 32 tests existentes no deben verse afectados por el rate limit.
+# spec-07: los tests existentes no deben verse afectados por el rate limit.
 # RateLimitTest lo reactiva con @Property(name = "ratelimit.enabled", value = "true").
+# spec-08: el flujo E2E (BankApiIntegrationTest) tampoco debe recibir 429.
 ratelimit:
   enabled: false

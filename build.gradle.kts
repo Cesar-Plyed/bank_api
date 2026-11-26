@@ -2,6 +2,7 @@ plugins {
     id("io.micronaut.application") version "4.6.2"
     id("com.gradleup.shadow") version "8.3.9"
     id("io.micronaut.aot") version "4.6.2"
+    jacoco
 }
 
 version = "0.1"
@@ -93,6 +94,34 @@ micronaut {
 
 tasks.named<io.micronaut.gradle.docker.NativeImageDockerfile>("dockerfileNative") {
     jdkVersion = "21"
+}
+
+// spec-08: cobertura de líneas con JaCoCo (HTML + XML) y verificación ≥ 70%.
+jacoco {
+    toolVersion = "0.8.13"
+}
+
+tasks.named<org.gradle.testing.jacoco.tasks.JacocoReport>("jacocoTestReport") {
+    dependsOn(tasks.named("test"))
+    reports {
+        html.required.set(true)
+        xml.required.set(true)
+    }
+}
+
+tasks.named<org.gradle.testing.jacoco.tasks.JacocoCoverageVerification>("jacocoTestCoverageVerification") {
+    dependsOn(tasks.named("test"))
+    violationRules {
+        // El bundle son todas las clases de main, todas bajo io.onstructive.micronaut.*.
+        rule {
+            element = "BUNDLE"
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "0.70".toBigDecimal()
+            }
+        }
+    }
 }
 
 

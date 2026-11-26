@@ -454,3 +454,67 @@ El usuario pidió que el contador `transactions.minute` cubriera también `GET /
 - XML de resultados: `RateLimitTest: tests=4`, `RateLimitDisabledTest: tests=1`, y los 32 preexistentes intactos; **37 tests, skipped=0, failures=0, errors=0**.
 
 **Incidencias y desviaciones:** ninguna nueva. El warning `[removal]` de `HttpAttributes.PRINCIPAL` y la limitación de contadores en memoria ya estaban documentados en la sección anterior. No se añadió cobertura ni empaquetado; no se tocaron JWT, migraciones ni specs ajenas; no se hizo commit.
+
+## 2026-11-25 — spec-08: Suite completa y cobertura
+
+**Acciones realizadas:**
+- `build.gradle.kts`: añadido el plugin `jacoco` (`toolVersion = 0.8.13`). `jacocoTestReport` genera **HTML y XML** y depende de `test`; `jacocoTestCoverageVerification` depende de `test` y aplica una regla `BUNDLE` con `counter=LINE`, `value=COVEREDRATIO`, `minimum=0.70` sobre todas las clases de `main` (todas bajo `io.onstructive.micronaut.*`). **No se bajó el umbral**: la cobertura base con 37 tests ya era 86.39% de líneas.
+- `AccountServiceTest.java` (nuevo, 8 tests, `@MicronautTest(transactional=false)`): `create` con saldo por defecto 0 y dueño real, saldo/currency iniciales, número duplicado → `DuplicateResourceException` (409), `findAllByOwner` aislado por dueño, `findByIdForOwner` inexistente/ajeno → `AccountNotFoundException` (404), `deposit`/`withdraw` persisten el balance, retiro superior al saldo → `InsufficientFundsException` (400) sin cambios, y `delete` con saldo → `BusinessRuleException` (400) frente a borrado con saldo 0 → fila eliminada.
+- `TransactionServiceTest.java` (nuevo, 8 tests, `@MicronautTest(transactional=false)`): depósito, retiro y transferencia con una sola `Transaction` `COMPLETED` y balances actualizados; rollback de fondos insuficientes (retiro y transferencia) sin filas nuevas; transferencia a la misma cuenta → `BusinessRuleException`; cuenta ajena/inexistente rechazada por depósito/retiro/transferencia/historial; historial en ambos sentidos.
+- `BankApiIntegrationTest.java` (nuevo, 2 tests E2E con `Micronaut HttpClient` y JWT real): (1) `register` → `login` → crear dos cuentas → listar/get → depósito → retiro → transferencia → historial en ambos sentidos → borrar con saldo → vaciar → borrar (204) → get (404), verificando balances, `status=COMPLETED`, `type` y payloads; (2) payloads único coherente en 409 (registro y número duplicados), 401 (credenciales y sin token), 404 (cuenta ajena en GET y depósito), 400 (`INSUFFICIENT_FUNDS`, `BUSINESS_RULE_VIOLATION` y `VALIDATION_ERROR` con `fieldErrors`).
+- `src/test/resources/application-test.yml`: comentario ampliado para indicar que el flujo E2E también depende de `ratelimit.enabled=false` (valor sin cambios).
+- `AGENTS.md`, `MEMORY.md`: actualizados con 55 tests y la cobertura real.
+
+**Comandos de verificación (salida literal):**
+- `./gradlew test jacocoTestReport jacocoTestCoverageVerification --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+  > Task :compileTestJava
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources UP-TO-DATE
+  > Task :testClasses
+  > Task :test
+  > Task :jacocoTestCoverageVerification
+  > Task :jacocoTestReport
+
+  BUILD SUCCESSFUL in 13s
+  8 actionable tasks: 4 executed, 4 up-to-date
+  ```
+- `./gradlew test --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+  > Task :compileTestJava UP-TO-DATE
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources UP-TO-DATE
+  > Task :testClasses UP-TO-DATE
+  > Task :test UP-TO-DATE
+
+  BUILD SUCCESSFUL in 508ms
+  6 actionable tasks: 6 up-to-date
+  ```
+- XML de resultados: `AccountControllerTest: tests=6`, `AccountServiceTest: tests=8`, `AuthControllerTest: tests=4`, `BankApiIntegrationTest: tests=2`, `BankaccountTest: tests=1`, `ErrorHandlingTest: tests=8`, `HealthControllerTest: tests=5`, `RateLimitDisabledTest: tests=1`, `RateLimitTest: tests=4`, `RepositoryTest: tests=1`, `TransactionControllerTest: tests=7`, `TransactionServiceTest: tests=8`; **55 tests, skipped=0, failures=0, errors=0 en 12 clases** (los 37 preexistentes siguen pasando).
+
+**Cobertura real (JaCoCo, `build/reports/jacoco/test/jacocoTestReport.xml`):**
+| Contador | Cubiertos | Total | Porcentaje |
+| --- | --- | --- | --- |
+| Línea | 305 | 338 | **90.24%** |
+| Instrucción | 1512 | 1613 | 93.74% |
+| Rama | 84 | 112 | 75.00% |
+| Método | 94 | 102 | 92.16% |
+| Clase | 35 | 37 | 94.59% |
+
+Reporte HTML generado en `build/reports/jacoco/test/html/index.html` y XML en `build/reports/jacoco/test/jacocoTestReport.xml`. Umbral de 70% de líneas superado sin bajarlo (antes de los tests nuevos ya era 86.39%).
+
+**Incidencias y desviaciones:**
+1. **Testcontainers no usado:** los tests de servicio e integración comparten el contenedor Podman `bank-api-db` (`127.0.0.1:5432`, Flyway V1/V2), según la decisión del dueño. No se arranca un contenedor efímero por suite.
+2. **REST Assured no usado:** el flujo E2E usa `io.micronaut.http.client.HttpClient` inyectado con `@Client("/")`, igual que los tests HTTP de specs anteriores. `toBlocking().exchange(...)` con `Argument.listOf(...)` para respuestas tipadas.
+3. `jacoco.toolVersion` se fijó a `0.8.13` (compatible con Java 21) en vez de depender del valor por defecto de Gradle 8.14.3; no cambia el umbral ni el alcance.
+4. `application-test.yml` ya tenía `ratelimit.enabled=false` de la spec-07; solo se actualizó el comentario para hacer explícito que el E2E de spec-08 depende de él. Sin eso, el flujo de 20+ peticiones podría recibir 429 (límite de transacciones = 10/minuto en producción).
+5. La regla de verificación es de **bundle**, no por clase: dos clases quedan al 0% de líneas (`Application.main` y el DTO `AmountRequest`, sin uso en la API), pero el bundle global (`io.onstructive.micronaut.*`) está al 90.24%, por encima del 70% exigido. No se añadieron tests artificiales para esas dos clases porque no forman parte del flujo de negocio.
+6. Las filas de prueba quedan en la BD (convención ya aceptada). Contenedor `bank-api-db` dejado activo; no se borró nada. No se tocaron migraciones, seguridad, specs ajenas ni se hizo empaquetado (spec-09).
+
+**No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `test(coverage): suite de servicio/E2E y JaCoCo al 70% (spec-08)`.
