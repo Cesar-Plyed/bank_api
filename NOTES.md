@@ -29,3 +29,41 @@ Seguimiento de avance, cambios e incidencias. Fecha de hoy: **2026-11-25**.
 **Incidencias y desviaciones:** ninguna bloqueante. Se documentan dos warnings no bloqueantes (SLF4J sin provider durante la compilación; Podman sobre `/` no compartido). El socket rootless de Podman no se probó con un contenedor real: solo se verificaron `podman --version` e `info`, que es lo que pedía la spec.
 
 **No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `chore(build): bootstrap de entorno y andamiaje SDD (spec-00)`.
+
+## 2026-11-25 — spec-01: Dominio y persistencia (PostgreSQL + Flyway)
+
+**Acciones realizadas:**
+- Creados en `model/`: entidades `User`, `Account`, `Transaction` (records, IDs `UUID` asignados en código, **sin `@GeneratedValue`**, `BigDecimal` para dinero, `Instant` para fechas) y enums `AccountType`, `AccountStatus`, `TransactionType`, `TransactionStatus`.
+- `Account` incorpora `ownerId`, `accountType`, `status`, `createdAt`; `Transaction` incorpora `fromAccountId`, `toAccountId`, `amount`, `type`, `status`, `timestamp`, `description`. `Account.create(...)` genera el UUID y usa `DEFAULT_OWNER_ID` porque el endpoint legacy `/accounts` aún no tiene campo owner.
+- Repositorios con `Dialect.POSTGRES`: `UserRepository` (`findByUsername`, `existsByUsername`, `existsByEmail`), `AccountRepository` (`findByOwnerId`, `existsByAccountNumber`, más el `findByAccountNumber` previo) y `TransactionRepository` (`findByFromAccountIdOrToAccountId`).
+- Migraciones `V1__CreateTables.sql` (users/accounts/transactions) y `V2__AddIndexes.sql` (índices de owner_id y de las columnas de transactions) en `src/main/resources/db/migration/`.
+- `application.properties`: datasource PostgreSQL con valores por entorno y defaults (`BANK_DB_HOST`, `BANK_DB_PORT`, `BANK_DB_NAME`, `BANK_DB_USER`, `BANK_DB_PASSWORD`) y **`datasources.default.schema-generate=NONE`** → Flyway es el único dueño del esquema. `flyway.datasources.default.enabled=true`.
+- `build.gradle.kts`: `runtimeOnly("org.postgresql:postgresql")` y `runtimeOnly("org.flywaydb:flyway-database-postgresql:10.22.0")` (Flyway 10 externalizó el soporte de PostgreSQL).
+- Ajuste mínimo en `AccountService`: reconstruye `Account` con los nuevos campos en deposit/withdraw; `create` sigue usando `repo.save(...)` (en esta versión `save` siempre hace INSERT, verificado en el bytecode de `DefaultSaveEntityInterceptor`). `AccountController` no cambió.
+- Test mínimo `RepositoryTest`: guarda y lee un `User` y una `Account` contra la BD real de Podman.
+
+**Comandos Podman exactos (también en `AGENTS.md` y `MEMORY.md`):**
+- Descargar imagen (una vez): `podman pull docker.io/library/postgres:15`
+- Arrancar: `podman run -d --name bank-api-db -e POSTGRES_DB=bank_api -e POSTGRES_USER=bank_user -e POSTGRES_PASSWORD=bank_pass -p 127.0.0.1:5432:5432 docker.io/library/postgres:15`
+- Parar / reiniciar: `podman stop bank-api-db` / `podman start bank-api-db`
+- Estado: `podman ps`
+- Verificar tablas: `podman exec bank-api-db psql -U bank_user -d bank_api -c '\dt'`; índices: sustituir `\dt` por `\di`.
+- **No se borró el contenedor ni ningún volumen.** No se tocaron los contenedores ajenos (`integrity-*`, `hq-*`, `ai-cuda`) que ya estaban parados.
+
+**Verificación (salida literal):**
+- Antes del primer arranque de la app: `podman exec bank-api-db psql -U bank_user -d bank_api -c '\dt'` → `Did not find any relations.`
+- Después de `./gradlew test`: `podman ps` → contenedor `bank-api-db`, imagen `docker.io/library/postgres:15`, `Up`, `127.0.0.1:5432->5432/tcp`.
+- `podman exec bank-api-db psql -U bank_user -d bank_api -c '\dt'` → `accounts`, `flyway_schema_history`, `transactions`, `users` (4 rows).
+- `podman exec bank-api-db psql -U bank_user -d bank_api -c '\di'` → `idx_accounts_owner_id`, `idx_transactions_from_account_id`, `idx_transactions_timestamp`, `idx_transactions_to_account_id`, más los índices primarios/únicos de V1.
+- `SELECT version, description, success FROM flyway_schema_history ORDER BY version;` → `1 | CreateTables | t`, `2 | AddIndexes | t`.
+- `./gradlew classes` → `BUILD SUCCESSFUL in 1s`. `./gradlew test` → `BUILD SUCCESSFUL in 3s`, `5 actionable tasks: 2 executed, 3 up-to-date`.
+
+**Incidencias y desviaciones:**
+1. El placeholder `${BANK_DB_URL:jdbc:postgresql://...}` se resolvió mal (Micronaut devolvió `5432/bank_api` y falló con `Invalid JDBC URL`). Se sustituyó por una URL compuesta con placeholders sin colon en el default: `jdbc:postgresql://${BANK_DB_HOST:127.0.0.1}:${BANK_DB_PORT:5432}/${BANK_DB_NAME:bank_api}`. Sigue siendo "valores por entorno con defaults", pero el nombre de variable es `BANK_DB_HOST/PORT/NAME`, no un único `BANK_DB_URL`.
+2. Flyway 10.22.0 (traído por Micronaut Flyway 7.9.2) falló con `Unsupported Database: PostgreSQL 15.20` hasta añadir `org.flywaydb:flyway-database-postgresql:10.22.0`. Dependencia nueva no prevista literalmente en la spec, pero necesaria.
+3. `CrudRepository` de Micronaut Data 4.14.3 no expone `insert(...)`; se usa `save(...)`, que internamente siempre genera un INSERT. Sin impacto funcional.
+4. No se añadieron restricciones FK entre tablas (la spec solo pedía tablas + índices); `owner_id`, `from_account_id` y `to_account_id` son UUID sin FK. Anotado como decisión de diseño para no ampliar el alcance.
+5. Se conservó la dependencia H2 en `build.gradle.kts` (ya no la usa el datasource) para minimizar cambios. Warning SLF4J sin providers sigue apareciendo, no bloqueante.
+6. El contenedor `bank-api-db` queda **activo** a propósito: los tests lo necesitan. No se hizo commit (regla SDD).
+
+**No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(persistence): modelo de dominio y Flyway sobre PostgreSQL (spec-01)`.

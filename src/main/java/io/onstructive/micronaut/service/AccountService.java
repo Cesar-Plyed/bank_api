@@ -29,8 +29,9 @@ public class AccountService {
     public Account deposit(UUID id, BigDecimal amount) {
         Account acc = repo.findById(id).orElseThrow(
             () -> new IllegalArgumentException("Account not found: " + id));
-        Account updated = new Account(acc.id(), acc.accountNumber(),
-                                      acc.currency(), acc.balance().add(amount));
+        Account updated = new Account(acc.id(), acc.ownerId(), acc.accountNumber(),
+                                      acc.currency(), acc.balance().add(amount),
+                                      acc.accountType(), acc.status(), acc.createdAt());
         return repo.update(updated);
     }
  
@@ -39,8 +40,9 @@ public class AccountService {
             () -> new IllegalArgumentException("Account not found: " + id));
         if (acc.balance().compareTo(amount) < 0)
             throw new IllegalStateException("Insufficient funds");
-        Account updated = new Account(acc.id(), acc.accountNumber(),
-                                      acc.currency(), acc.balance().subtract(amount));
+        Account updated = new Account(acc.id(), acc.ownerId(), acc.accountNumber(),
+                                      acc.currency(), acc.balance().subtract(amount),
+                                      acc.accountType(), acc.status(), acc.createdAt());
         return repo.update(updated);
     }
  

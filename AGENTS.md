@@ -5,20 +5,26 @@
 - Entrada: `io.onstructive.micronaut.Application`; paquete base `io.onstructive.micronaut`.
 - Stack verificado: Java 21 (`build.gradle.kts`), Micronaut 4.10.12 (`gradle.properties`), plugin Gradle 4.6.2, wrapper Gradle 8.14.3.
 - Único controller: `AccountController` en `/accounts` (**sin** prefijo `/api`): list, create, deposit, withdraw, delete; IDs `UUID`.
-- Seguridad desactivada: `micronaut.security.enabled=false`. No hay `User` ni JWT; las reglas `intercept-url-map` de Swagger están inactivas.
-- Persistencia: H2 en memoria (`jdbc:h2:mem:devDb`) con `schema-generate=CREATE_DROP` → los datos se pierden al reiniciar. `AccountRepository` fija `Dialect.H2`. Flyway está habilitado pero **no hay migraciones V1/V2**.
+- Seguridad desactivada: `micronaut.security.enabled=false`. Existe la entidad `User` de dominio (spec-01), pero **no hay autenticación/JWT**; las reglas `intercept-url-map` de Swagger están inactivas.
+- Persistencia (spec-01): PostgreSQL 15 en Podman rootless en `127.0.0.1:5432` (db `bank_api`, usuario `bank_user`, password `bank_pass`). Los tres repositorios fijan `Dialect.POSTGRES`. **`datasources.default.schema-generate=NONE`**: Flyway es el único dueño del esquema (`V1__CreateTables.sql`, `V2__AddIndexes.sql` en `src/main/resources/db/migration/`).
 - Swagger UI: `/swagger-ui.html` (recursos `classpath:META-INF/swagger`). `src/main/resources/openapi/bankaccount-0.0.yml` es un placeholder obsoleto (solo `/bankaccount`): no es fuente de verdad.
 
 ## Comandos exactos
-- `./gradlew test` — suite actual: solo `BankaccountTest` (smoke test de arranque con `@MicronautTest`).
+- `./gradlew test` — suite actual: `BankaccountTest` (smoke de arranque) + `RepositoryTest` (spec-01, guarda/lee `User` y `Account`).
 - `./gradlew test --tests "io.onstructive.micronaut.BankaccountTest"` — test puntual.
 - `./gradlew run` / `./gradlew build` / `./gradlew classes`.
-- Requiere JDK 21 y `JAVA_HOME`: esta máquina no tiene `java` en PATH, así que el wrapper falla hasta exportarlo. JDK instalado (spec-00): `/home/void/AI/apps/jdk-21` (Temurin 21.0.13.1+2) → `export JAVA_HOME=/home/void/AI/apps/jdk-21; export PATH="$JAVA_HOME/bin:$PATH"`. No hay PostgreSQL; sí hay Podman 6.1.4 para contenedores locales.
+- Requiere JDK 21 y `JAVA_HOME`: esta máquina no tiene `java` en PATH, así que el wrapper falla hasta exportarlo. JDK instalado (spec-00): `/home/void/AI/apps/jdk-21` (Temurin 21.0.13.1+2) → `export JAVA_HOME=/home/void/AI/apps/jdk-21; export PATH="$JAVA_HOME/bin:$PATH"`. No hay PostgreSQL en el host; sí hay Podman 6.1.4 para contenedores locales.
+- Base de datos (spec-01), **Podman, no Docker**. Arrancar:
+  `podman pull docker.io/library/postgres:15` (una sola vez) y
+  `podman run -d --name bank-api-db -e POSTGRES_DB=bank_api -e POSTGRES_USER=bank_user -e POSTGRES_PASSWORD=bank_pass -p 127.0.0.1:5432:5432 docker.io/library/postgres:15`.
+- Parar: `podman stop bank-api-db`. Arrancar de nuevo: `podman start bank-api-db`. Estado: `podman ps`. **No borrar el contenedor ni su volumen sin permiso explícito.**
+- Verificar esquema: `podman exec bank-api-db psql -U bank_user -d bank_api -c '\dt'` (y `-c '\di'` para índices). Las apps/tests necesitan el contenedor activo; `./gradlew test` falla si la BD no está arriba.
+- Datasource por entorno (defaults incluidos): `BANK_DB_HOST=127.0.0.1`, `BANK_DB_PORT=5432`, `BANK_DB_NAME=bank_api`, `BANK_DB_USER=bank_user`, `BANK_DB_PASSWORD=bank_pass`. El esquema **no** lo genera Micronaut: `datasources.default.schema-generate=NONE` y Flyway aplica V1/V2 en el primer arranque.
 
 ## Convenciones del repo
 - Configuración real en `application.properties` (no YAML, pese al README), `logback.xml` y `openapi.properties`.
 - `settings.gradle.kts`: `rootProject.name="bankaccount"` (el directorio se llama `bank_api`).
-- Tests sin servicios externos hoy; `@MicronautTest` + `EmbeddedApplication`.
+- Tests con `@MicronautTest` + `EmbeddedApplication`: `BankaccountTest` (smoke) y `RepositoryTest` (spec-01). Requieren la BD de Podman activa.
 - Preguntar antes de borrar o sobrescribir archivos (convención global del equipo).
 
 ## Spec Driven Development (SDD) — reglas obligatorias

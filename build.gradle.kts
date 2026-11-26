@@ -21,6 +21,8 @@ dependencies {
     annotationProcessor("io.micronaut.serde:micronaut-serde-processor")
     implementation("io.micronaut.data:micronaut-data-jdbc")
     implementation("io.micronaut.flyway:micronaut-flyway")
+    // Flyway 10 externalizó el soporte de PostgreSQL a este módulo.
+    runtimeOnly("org.flywaydb:flyway-database-postgresql:10.22.0")
     implementation("io.micronaut.security:micronaut-security")
     implementation("io.micronaut.serde:micronaut-serde-jackson")
     implementation("io.micronaut.sql:micronaut-jdbc-hikari")
@@ -28,6 +30,7 @@ dependencies {
     compileOnly("io.micronaut.openapi:micronaut-openapi-annotations")
     runtimeOnly("ch.qos.logback:logback-classic")
     runtimeOnly("com.h2database:h2")
+    runtimeOnly("org.postgresql:postgresql")
     testImplementation("io.micronaut:micronaut-http-client")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
