@@ -19,6 +19,8 @@ public final class ErrorPayload {
     public static final String BUSINESS_RULE = "BUSINESS_RULE_VIOLATION";
     public static final String VALIDATION = "VALIDATION_ERROR";
     public static final String INTERNAL = "INTERNAL_ERROR";
+    // spec-07: exceso de peticiones (HTTP 429) con el mismo payload único.
+    public static final String RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED";
 
     private ErrorPayload() {
     }

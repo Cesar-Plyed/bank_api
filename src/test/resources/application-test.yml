@@ -1,0 +1,4 @@
+# spec-07: los 32 tests existentes no deben verse afectados por el rate limit.
+# RateLimitTest lo reactiva con @Property(name = "ratelimit.enabled", value = "true").
+ratelimit:
+  enabled: false

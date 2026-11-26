@@ -329,3 +329,128 @@ Seguimiento de avance, cambios e incidencias. Fecha de hoy: **2026-11-25**.
 6. Durante la verificación manual se arrancó la app con `./gradlew run` y se detuvo (SIGTERM) antes de los tests; el contenedor `bank-api-db` sigue activo, no se borró nada. No se modificaron migraciones, specs ajenas ni se hizo commit (regla SDD).
 
 **No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(observability): Swagger, health y logs JSON (spec-06)`.
+
+## 2026-11-25 — spec-07: Rate limiting
+
+**Acciones realizadas:**
+- `exception/ErrorPayload`: nuevo código estable `RATE_LIMIT_EXCEEDED`; se usa en el body del 429.
+- `filter/RateLimitFilter.java` (nuevo): `@Filter("/api/**")` sobre `HttpServerFilter`, con orden `ServerFilterPhase.SECURITY.after()` (39250) para ejecutarse después de `SecurityFilter` y poder leer el `Authentication` del request. Tres contadores en memoria con ventana fija (`ConcurrentHashMap` + `synchronized` por clave): IP/minuto, usuario autenticado/hora y transacciones/minuto. El bucket de transacciones cubre `/api/transactions/**` **y** el historial `GET /api/accounts/{accountId}/transactions` (ambas comparten la misma clave de IP/usuario, así que suman peticiones al mismo límite). Si alguno se excede → 429 con `ErrorPayload.of(...)` (`error`, `message`, `path`, `timestamp`; sin `fieldErrors`). En caso contrario, `chain.proceed(request)`.
+- `application.properties`: defaults configurables con los valores del README — `ratelimit.enabled=true`, `ratelimit.per-ip.minute=100`, `ratelimit.per-user.hour=1000`, `ratelimit.transactions.minute=10`. El filtro los legge con `@Value` y defaults equivalentes.
+- `src/test/resources/application-test.yml` (nuevo): `ratelimit.enabled=false` para que los 32 tests existentes no vean 429.
+- `RateLimitTest.java` (nuevo, 4 tests): `@Property` de clase reactiva el filtro con límites pequeños (IP=5, usuario=3, transacciones=2). Cada test usa IPs únicas vía `X-Forwarded-For` y usuarios registrados únicos para aislar los contadores: 429 por IP (endpoint público `/api/auth/login`), por usuario (`GET /api/accounts`), por transacciones (`POST /api/transactions/deposit`) y el test `transactionLimitCombinesDepositAndHistoryPaths` (depósito + dos consultas al historial; la tercera, `GET /api/accounts/{id}/transactions`, devuelve 429 con el payload único). Todos verifican `error=RATE_LIMIT_EXCEEDED`, `message`, `path` y `timestamp`.
+- `RateLimitDisabledTest.java` (nuevo, 1 test): `@Property ratelimit.enabled=false` con límites de 1/2; 10 peticiones después de las cuales no aparece ningún 429.
+
+**Verificación (salida literal):**
+- `./gradlew test --tests "*RateLimit*Test" --console=plain` (tras corregir el `Optional.ofNullable(getRemoteAddress())`):
+  ```
+  > Task :compileJava
+  SLF4J(W): No SLF4J providers were found.
+  SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+  SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+  Note: Generating OpenAPI Documentation
+  Note: Writing OpenAPI file to destination: /home/void/AI/projects/bank_api/build/classes/java/main/META-INF/swagger/bank-account-api-1.0.yml
+  ... (vistas Swagger) ...
+  /home/void/AI/projects/bank_api/src/main/java/io/onstructive/micronaut/filter/RateLimitFilter.java:89: warning: [removal] HttpAttributes in io.micronaut.http has been deprecated and marked for removal
+          return request.getAttribute(HttpAttributes.PRINCIPAL.toString(), Authentication.class)
+                                      ^
+  /home/void/AI/projects/bank_api/src/main/java/io/onstructive/micronaut/filter/RateLimitFilter.java:89: warning: [removal] PRINCIPAL in HttpAttributes has been deprecated and marked for removal
+                                                    ^
+  2 warnings
+
+  > Task :processResources
+  > Task :classes
+  > Task :compileTestJava
+  > Task :inspectRuntimeClasspath
+  > Task :processTestResources
+  > Task :testClasses
+  > Task :test
+
+  [Incubating] Problems report is available at: file:///home/void/AI/projects/bank_api/build/reports/problems/problems-report.html
+
+  BUILD SUCCESSFUL in 5s
+  6 actionable tasks: 6 executed
+  ```
+- `./gradlew test --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+  > Task :compileTestJava UP-TO-DATE
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources UP-TO-DATE
+  > Task :testClasses UP-TO-DATE
+  > Task :test
+
+  BUILD SUCCESSFUL in 9s
+  6 actionable tasks: 1 executed, 5 up-to-date
+  ```
+- XML de resultados: `AccountControllerTest: tests=6`, `AuthControllerTest: tests=4`, `BankaccountTest: tests=1`, `ErrorHandlingTest: tests=8`, `HealthControllerTest: tests=5`, `RateLimitDisabledTest: tests=1`, `RateLimitTest: tests=4`, `RepositoryTest: tests=1`, `TransactionControllerTest: tests=7`; **37 tests, skipped=0, failures=0, errors=0** (los 32 preexistentes siguen pasando; se añaden 5).
+
+**Incidencias y desviaciones:**
+1. **Contadores en memoria y por instancia:** se reinician al arrancar y no se comparten entre réplicas; no hay persistencia ni Redis. Es la desviación exigida por la spec, documentada en `AGENTS.md`, `NOTES.md` y `MEMORY.md`.
+2. **Identificación de IP:** se prefiere la cabecera `X-Forwarded-For` (estándar tras proxy) y se cae a `getRemoteAddress()`. Además de ser útil en producción, permite aislar los contadores entre tests con IPs sintéticas (`rl-<uuid>`); sin esto, los tests se contaminarían porque el `@Client("/")` comparte IP 127.0.0.1.
+3. **`HttpAttributes.PRINCIPAL` está deprecado** en Micronaut 4.10.21 (`warning: [removal]`): sigue funcionando y es lo que usa `SecurityFilter` para publicar el `Authentication`; se conserva en vez de `SecurityService` porque el atributo del request es inequívoco en el filtro. Warning no bloqueante.
+4. `HttpRequest.getRemoteAddress()` devuelve `InetSocketAddress` (no `Optional`) en esta versión: el primer `./gradlew test --tests "*RateLimit*Test"` falló en `compileJava` con `cannot find symbol: method map(...)`; se corrigió envolviendo con `Optional.ofNullable(...)`. Tras el arreglo, compila y pasa.
+5. `application-test.yml` se carga correctamente (SnakeYAML 2.5 está en el classpath) y las `@Property` de clase de `RateLimitTest` tienen precedencia sobre él (comprobado: los 3 tests de límite devuelven 429 solo con `ratelimit.enabled=true`). `RateLimitDisabledTest` usa una clase distinta para no compartir contexto/contadores con los tests activos.
+6. **Corrección solicitada por el usuario:** el límite de transacciones ya cubre también `GET /api/accounts/{accountId}/transactions`. Se eliminó la desviación anterior que dejaba el historial fuera: `isTransactionPath(path)` detecta `/api/transactions/**` o `/api/accounts/**` que termina en `/transactions`, y usa la misma clave de bucket (`user:<nombre>` o `ip:<ip>`). Por tanto, depósitos/retiros/transferencias y consultas de historial comparten el contador de 10/minuto. Verificado con `RateLimitTest.transactionLimitCombinesDepositAndHistoryPaths`.
+7. No se añadió cobertura/JaCoCo ni empaquetado (fuera de alcance: spec-08/09). No se tocaron JWT, migraciones ni specs ajenas. Contenedor `bank-api-db` dejado activo; no se borró nada.
+
+**No se hizo commit** (regla SDD): el orquestador debe verificar y pedir aprobación antes del commit, p. ej. `feat(ratelimit): filtro de rate limiting con 429 unificado (spec-07)`.
+
+## 2026-11-25 — corrección de spec-07: historial dentro del límite de transacciones
+
+El usuario pidió que el contador `transactions.minute` cubriera también `GET /api/accounts/{accountId}/transactions`, compartiendo bucket con `/api/transactions/**`. Se aplicó sin tocar los otros dos límites ni los defaults.
+
+**Acciones realizadas:**
+- `filter/RateLimitFilter.java`: nuevo helper `isTransactionPath(path)` → `path.startsWith("/api/transactions/")` o (`path.startsWith("/api/accounts/")` y `path.endsWith("/transactions")`). Se mantiene la misma clave de bucket (`user:<nombre>` cuando hay JWT, `ip:<ip>` si no) para ambas rutas. Javadoc actualizado.
+- `RateLimitTest.java`: nuevo test `transactionLimitCombinesDepositAndHistoryPaths` (token válido, IP única, límite de transacciones=2): un depósito + una consulta de historial se permiten; la segunda consulta de historial devuelve 429 con `error=RATE_LIMIT_EXCEEDED` y `path=/api/accounts/{id}/transactions`.
+- `AGENTS.md`, `NOTES.md`, `MEMORY.md`: eliminada la desviación que dejaba el historial fuera; documentado el comportamiento nuevo.
+
+**Verificación (salida literal):**
+- `./gradlew test --tests "*RateLimit*Test" --console=plain`:
+  ```
+  > Task :compileJava
+  SLF4J(W): No SLF4J providers were found.
+  SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+  SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+  Note: Generating OpenAPI Documentation
+  Note: Writing OpenAPI file to destination: /home/void/AI/projects/bank_api/build/classes/java/main/META-INF/swagger/bank-account-api-1.0.yml
+  ... (vistas y recursos Swagger) ...
+  /home/void/AI/projects/bank_api/src/main/java/io/onstructive/micronaut/filter/RateLimitFilter.java:107: warning: [removal] HttpAttributes in io.micronaut.http has been deprecated and marked for removal
+          return request.getAttribute(HttpAttributes.PRINCIPAL.toString(), Authentication.class)
+                                      ^
+  /home/void/AI/projects/bank_api/src/main/java/io/onstructive/micronaut/filter/RateLimitFilter.java:107: warning: [removal] PRINCIPAL in HttpAttributes has been deprecated and marked for removal
+          return request.getAttribute(HttpAttributes.PRINCIPAL.toString(), Authentication.class)
+                                                    ^
+  2 warnings
+
+  > Task :processResources UP-TO-DATE
+  > Task :classes
+  > Task :compileTestJava
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources UP-TO-DATE
+  > Task :testClasses
+  > Task :test
+
+  [Incubating] Problems report is available at: file:///home/void/AI/projects/bank_api/build/reports/problems/problems-report.html
+
+  BUILD SUCCESSFUL in 5s
+  6 actionable tasks: 3 executed, 3 up-to-date
+  ```
+- `./gradlew test --console=plain`:
+  ```
+  > Task :compileJava UP-TO-DATE
+  > Task :processResources UP-TO-DATE
+  > Task :classes UP-TO-DATE
+  > Task :compileTestJava UP-TO-DATE
+  > Task :inspectRuntimeClasspath UP-TO-DATE
+  > Task :processTestResources UP-TO-DATE
+  > Task :testClasses UP-TO-DATE
+  > Task :test
+
+  BUILD SUCCESSFUL in 9s
+  6 actionable tasks: 1 executed, 5 up-to-date
+  ```
+- XML de resultados: `RateLimitTest: tests=4`, `RateLimitDisabledTest: tests=1`, y los 32 preexistentes intactos; **37 tests, skipped=0, failures=0, errors=0**.
+
+**Incidencias y desviaciones:** ninguna nueva. El warning `[removal]` de `HttpAttributes.PRINCIPAL` y la limitación de contadores en memoria ya estaban documentados en la sección anterior. No se añadió cobertura ni empaquetado; no se tocaron JWT, migraciones ni specs ajenas; no se hizo commit.
